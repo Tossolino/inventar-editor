@@ -854,19 +854,14 @@ class App:
         self.book_combo.bind("<<ComboboxSelected>>", self.on_book_selected)
 
         id_box = tk.Frame(rows)
-        id_box.grid(row=1, column=0, sticky="w", pady=(5, 0))
+        id_box.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
         tk.Label(id_box, text="Inventar-Nr.:", font=(FONT, 11, "bold")).pack(side="left")
         self.id_entry = tk.Entry(id_box, width=4, font=(FONT, 14, "bold"), justify="center")
         self.id_entry.pack(side="left", padx=(6, 0))
-        self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
-        self.print_btn = ttk.Button(id_box, image=self.print_icon, width=3,
-                                    command=self.quick_print)
-        self.print_btn.pack(side="left", padx=(6, 0))
-        Tooltip(self.print_btn, f"Schnelldruck „{BED_SHEET}“")
         self.id_entry.bind("<Return>", self.load_id)
         self.id_entry.bind("<KP_Enter>", self.load_id)
 
-        # Bereich / Etage – bündig mit dem linken Rand der Knopfgruppe darunter
+        # Bereich / Etage
         info = tk.Frame(rows)
         info.grid(row=0, column=1, sticky="w", padx=(14, 0))
         tk.Label(info, text="Bereich:").pack(side="left")
@@ -884,8 +879,9 @@ class App:
                   padx=8, pady=0, cursor="hand2",
                   command=self.close_floor).pack(side="left", padx=(16, 0))
 
-        actions = tk.Frame(rows)
-        actions.grid(row=1, column=1, sticky="w", padx=(14, 0), pady=(5, 0))
+        # Knopfgruppe direkt rechts neben dem Nummernfeld (gleiche Zeile wie id_box)
+        actions = tk.Frame(id_box)
+        actions.pack(side="left", padx=(18, 0))
         group = tk.Frame(actions, highlightthickness=1, highlightbackground="#9a9a9a",
                          highlightcolor="#9a9a9a", padx=4, pady=3)
         group.pack(side="left")
@@ -897,6 +893,11 @@ class App:
         save_btn = ttk.Button(group, image=self.save_icon, command=self.save_book, width=3)
         save_btn.pack(side="left", padx=2)
         Tooltip(save_btn, "Liste speichern (Strg+S)")
+        self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
+        self.print_btn = ttk.Button(group, image=self.print_icon, width=3,
+                                    command=self.quick_print)
+        self.print_btn.pack(side="left", padx=2)
+        Tooltip(self.print_btn, f"Schnelldruck „{BED_SHEET}“")
 
         self.bed_btn = tk.Button(actions, text=BED_SHEET, font=(FONT, 10), relief="raised", bd=1,
                                  padx=10, pady=3, cursor="hand2", command=self.on_bed_button)
