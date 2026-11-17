@@ -21,7 +21,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
-from logo_data import LOGO_PNG_B64, SAVE_PNG_B64
+from logo_data import LOGO_PNG_B64, PRINT_PNG_B64, SAVE_PNG_B64
 from version import VERSION
 
 try:
@@ -856,8 +856,13 @@ class App:
         id_box = tk.Frame(rows)
         id_box.grid(row=1, column=0, sticky="w", pady=(5, 0))
         tk.Label(id_box, text="Inventar-Nr.:", font=(FONT, 11, "bold")).pack(side="left")
-        self.id_entry = tk.Entry(id_box, width=10, font=(FONT, 14, "bold"), justify="center")
+        self.id_entry = tk.Entry(id_box, width=4, font=(FONT, 14, "bold"), justify="center")
         self.id_entry.pack(side="left", padx=(6, 0))
+        self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
+        self.print_btn = ttk.Button(id_box, image=self.print_icon, width=3,
+                                    command=self.quick_print)
+        self.print_btn.pack(side="left", padx=(6, 0))
+        Tooltip(self.print_btn, f"Schnelldruck „{BED_SHEET}“")
         self.id_entry.bind("<Return>", self.load_id)
         self.id_entry.bind("<KP_Enter>", self.load_id)
 
@@ -1523,6 +1528,22 @@ class App:
                 self.paint_option(name)
                 hits.append(name)
         return hits
+
+    def quick_print(self):
+        """Wie "Schnelldruck" in Excel: Blatt PRO Pflegebett mit 1 Kopie auf den
+        Standarddrucker (Druckbereich des Blatts)."""
+        self.print_btn.configure(state="disabled")      # Doppelklick-Schutz
+        self.root.after(3000, lambda: self.print_btn.configure(state="normal"))
+        self._quick_print()
+
+    @excel_action
+    def _quick_print(self):
+        app, wb, ws = self.get_book()
+        if self.row is None:
+            raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
+        wb.Worksheets(BED_SHEET).PrintOut()
+        self.message(f"„{BED_SHEET}“ für Inv.-Nr. {self.id_label} an den Drucker gesendet.")
+        return self.focus_id()
 
     @excel_action
     def close_floor(self):
