@@ -21,7 +21,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
-from logo_data import LOGO_PNG_B64
+from logo_data import LOGO_PNG_B64, SAVE_PNG_B64
 from version import VERSION
 
 try:
@@ -55,6 +55,19 @@ BED_TYPE_COL = "P"
 BED_MAKER_COL = "O"
 BED_LIST_FIRST_ROW = 7
 NEW_BED_VALUES = {"C": "Pflegebett", "H": "CE", "O": "Heim"}   # D und E aus der Auswahl
+
+# Optionen auf "PRO Pflegebett": (Name, Zelle, voreingestellt, Wert wenn aus, rot wenn aus)
+# Angehakt wird immer "Ja" eingetragen.
+BED_OPTIONS = [
+    ("Aufrichter", "C1", False, "-", False),
+    ("Bettleuchte", "C2", False, "-", False),
+    ("Seitengitter vorh.", "C3", True, "Nein", False),
+    ("B-Maß", "C4", True, "Nein", True),
+    ("Handschalter", "K16", True, "Nein", True),
+    ("Netzstecker", "K19", True, "Nein", True),
+    ("Furnierschaden", "G46", True, "Nein", True),
+]
+OPTION_ON = "Ja"
 
 SELECTABLE = ["B", "C", "D", "E", "F", "G", "H", "J", "O", "P", "Q", "R", "S"]
 AUTO_COLS = ["Q", "R", "S"]        # werden bei gelb/rot automatisch eingeblendet
@@ -529,6 +542,32 @@ def foreground_window():
         return None
 
 
+class Tooltip:
+    """Kleiner Hinweistext beim Darüberfahren mit der Maus."""
+
+    def __init__(self, widget, text):
+        self.widget, self.text, self.tip = widget, text, None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _event=None):
+        if self.tip:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.overrideredirect(True)
+        self.tip.attributes("-topmost", True)
+        tk.Label(self.tip, text=self.text, bg="#ffffe0", relief="solid", bd=1,
+                 padx=4, pady=1, font=(FONT, 9)).pack()
+        self.tip.geometry(f"+{x}+{y}")
+
+    def hide(self, _event=None):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
 # --------------------------------------------------------------------------
 # Auswahl des Bett-Typs
 # --------------------------------------------------------------------------
@@ -698,60 +737,93 @@ class App:
         rows.pack(side="left", fill="x", expand=True)
         self.head_rows = rows
 
-        # Zeile 1: Liste | Meldung | Bereich, Etage | Vordergrund, Version, Update
-        top = tk.Frame(rows)
-        top.pack(fill="x")
-        self.book_combo = ttk.Combobox(top, textvariable=self.book_var, state="readonly",
-                                       width=34, font=(FONT, 11, "bold"))
-        self.book_combo.pack(side="left")
-        self.book_combo.bind("<<ComboboxSelected>>", self.on_book_selected)
-        right = tk.Frame(top)
-        right.pack(side="right")
-        ttk.Checkbutton(right, text="Immer im Vordergrund", variable=self.topmost,
-                        command=self.toggle_topmost).pack(side="left", padx=(0, 12))
-        tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
-        self.update_btn = ttk.Button(right, text="Nach Updates suchen",
-                                     command=self.on_update_button)
-        self.update_btn.pack(side="left")
-        self.msg_label = tk.Label(top, text="", anchor="w", fg="#444", width=58)
-        self.msg_label.pack(side="left", padx=(14, 8))
-        info = tk.Frame(top)
-        info.pack(side="left")
-        tk.Label(info, text="Bereich:").pack(side="left")
-        self.area_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=5, anchor="w")
-        self.area_label.pack(side="left", padx=(3, 10))
-        tk.Label(info, text="Etage:").pack(side="left")
-        self.floor_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=5, anchor="w")
-        self.floor_label.pack(side="left", padx=(3, 0))
+        # Raster: Spalte 0 = Liste / Inv.-Nr. | 1 = Bereich+Etage / Knopfgruppe
+        #         2 = Optionen (zweizeilig) | 3 = Meldung | 4 = Update / Status (rechts)
+        rows.columnconfigure(3, weight=1)
 
-        # Zeile 2: Inv.-Nr., Status, Aktionen
-        line = tk.Frame(rows)
-        line.pack(fill="x", pady=(5, 0))
-        tk.Label(line, text="Inventar-Nr.:", font=(FONT, 11, "bold")).pack(side="left")
-        self.id_entry = tk.Entry(line, width=10, font=(FONT, 14, "bold"), justify="center")
-        self.id_entry.pack(side="left", padx=(6, 8))
+        self.book_combo = ttk.Combobox(rows, textvariable=self.book_var, state="readonly",
+                                       width=26, font=(FONT, 11, "bold"))
+        self.book_combo.grid(row=0, column=0, sticky="w")
+        self.book_combo.bind("<<ComboboxSelected>>", self.on_book_selected)
+
+        id_box = tk.Frame(rows)
+        id_box.grid(row=1, column=0, sticky="w", pady=(5, 0))
+        tk.Label(id_box, text="Inventar-Nr.:", font=(FONT, 11, "bold")).pack(side="left")
+        self.id_entry = tk.Entry(id_box, width=10, font=(FONT, 14, "bold"), justify="center")
+        self.id_entry.pack(side="left", padx=(6, 0))
         self.id_entry.bind("<Return>", self.load_id)
         self.id_entry.bind("<KP_Enter>", self.load_id)
-        self.dot = tk.Canvas(line, width=22, height=22, highlightthickness=0)
-        self.dot_item = self.dot.create_oval(2, 2, 20, 20, outline="#777")
-        self.dot.pack(side="left")
-        self.status_label = tk.Label(line, text="–", width=18, anchor="w")
-        self.status_label.pack(side="left", padx=(4, 10))
-        group = tk.Frame(line, highlightthickness=1, highlightbackground="#9a9a9a",
+
+        # Bereich / Etage – bündig mit dem linken Rand der Knopfgruppe darunter
+        info = tk.Frame(rows)
+        info.grid(row=0, column=1, sticky="w", padx=(14, 0))
+        tk.Label(info, text="Bereich:").pack(side="left")
+        self.area_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=4, anchor="w")
+        self.area_label.pack(side="left", padx=(3, 10))
+        tk.Label(info, text="Etage:").pack(side="left")
+        self.floor_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=4, anchor="w")
+        self.floor_label.pack(side="left", padx=(3, 0))
+
+        actions = tk.Frame(rows)
+        actions.grid(row=1, column=1, sticky="w", padx=(14, 0), pady=(5, 0))
+        group = tk.Frame(actions, highlightthickness=1, highlightbackground="#9a9a9a",
                          highlightcolor="#9a9a9a", padx=4, pady=3)
         group.pack(side="left")
         ttk.Button(group, text="Übernehmen", style="Accent.TButton",
                    command=self.commit).pack(side="left", padx=2)
         self.undo_btn = ttk.Button(group, text="Rückgängig", command=self.undo)
         self.undo_btn.pack(side="left", padx=2)
-        ttk.Button(group, text="Speichern", command=self.save_book).pack(side="left", padx=2)
+        self.save_icon = tk.PhotoImage(data=SAVE_PNG_B64)
+        save_btn = ttk.Button(group, image=self.save_icon, command=self.save_book, width=3)
+        save_btn.pack(side="left", padx=2)
+        Tooltip(save_btn, "Liste speichern (Strg+S)")
 
-        self.bed_btn = tk.Button(line, text=BED_SHEET, font=(FONT, 10), relief="raised", bd=1,
+        self.bed_btn = tk.Button(actions, text=BED_SHEET, font=(FONT, 10), relief="raised", bd=1,
                                  padx=10, pady=3, cursor="hand2", command=self.on_bed_button)
-        self.bed_btn.pack(side="left", padx=(12, 2))
+        self.bed_btn.pack(side="left", padx=(12, 0))
         self.bed_default = (self.bed_btn.cget("bg"), self.bed_btn.cget("fg"),
                             self.bed_btn.cget("activebackground"))
         self.bed.trace_add("write", lambda *_: self.paint_bed_button())
+
+        # Optionen für "PRO Pflegebett" (zweizeilig)
+        opts = tk.Frame(rows)
+        opts.grid(row=0, column=2, rowspan=2, sticky="w", padx=(16, 0))
+        self.option_vars, self.option_widgets = {}, {}
+        per_row = math.ceil(len(BED_OPTIONS) / 2)
+        for i, (name, cell, default, _off, _red) in enumerate(BED_OPTIONS):
+            var = tk.BooleanVar(value=default)
+            cb = tk.Checkbutton(opts, text=name, variable=var, anchor="w", padx=2,
+                                command=lambda n=name: self.on_option(n))
+            cb.grid(row=i // per_row, column=i % per_row, sticky="w", padx=(0, 2), pady=1)
+            self.option_vars[name], self.option_widgets[name] = var, cb
+        self.option_default_look = (opts.cget("bg"), "black")
+        for name, *_ in BED_OPTIONS:
+            self.paint_option(name)
+
+        self.msg_label = tk.Label(rows, text="", anchor="w", justify="left", fg="#444",
+                                  width=1, height=2)
+        self.msg_label.grid(row=0, column=3, rowspan=2, sticky="we", padx=(14, 8))
+        self.msg_label.bind("<Configure>",
+                            lambda e: self.msg_label.configure(wraplength=max(60, e.width - 4)))
+
+        right = tk.Frame(rows)
+        right.grid(row=0, column=4, sticky="e")
+        ttk.Checkbutton(right, text="Immer im Vordergrund", variable=self.topmost,
+                        command=self.toggle_topmost).pack(side="left", padx=(0, 12))
+        tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
+        self.update_btn = ttk.Button(right, text="Nach Updates suchen",
+                                     command=self.on_update_button)
+        self.update_btn.pack(side="left")
+
+        # Status – rechtsbündig unter "Nach Updates suchen"
+        status_box = tk.Frame(rows)
+        status_box.grid(row=1, column=4, sticky="e", pady=(5, 0))
+        self.status_label = tk.Label(status_box, text="–", anchor="e")
+        self.status_label.pack(side="right")
+        self.dot = tk.Canvas(status_box, width=22, height=22, highlightthickness=0)
+        self.dot_item = self.dot.create_oval(2, 2, 20, 20, outline="#777")
+        self.dot.pack(side="right", padx=(0, 4))
+        tk.Label(status_box, text="Status", font=(FONT, 10, "bold")).pack(side="right", padx=(0, 6))
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
@@ -1047,6 +1119,7 @@ class App:
             return "break"
 
         app, wb, ws = self.get_book()
+        self.reset_options(wb)
         self.reset_auto()
         rows = find_rows(ws, norm_id(raw))
         if not rows:
@@ -1164,6 +1237,7 @@ class App:
         self.undo_stack.append(undo)
         del self.undo_stack[:-50]
         self.update_undo_button()
+        self.reset_options(wb)
 
         self.fill(read_row(ws, row))
         n = len(changes)
@@ -1208,6 +1282,64 @@ class App:
         wb.Save()
         self.message(f"„{wb.Name}“ gespeichert.")
         return "break"
+
+    # ------------------------------------------------- Optionen PRO Pflegebett
+    @staticmethod
+    def option_spec(name):
+        return next(o for o in BED_OPTIONS if o[0] == name)
+
+    def paint_option(self, name):
+        _n, _cell, _default, _off, red = self.option_spec(name)
+        cb = self.option_widgets[name]
+        bg, fg = self.option_default_look
+        if red and not self.option_vars[name].get():
+            cb.configure(bg="#f6c9c5", fg="#b3261e", activebackground="#f6c9c5",
+                         activeforeground="#b3261e", selectcolor="white",
+                         font=(FONT, 9, "bold"))
+        else:
+            cb.configure(bg=bg, fg=fg, activebackground=bg, activeforeground=fg,
+                         selectcolor="white", font=(FONT, 9))
+
+    def write_option(self, wb, name, on):
+        _n, cell, _default, off, _red = self.option_spec(name)
+        rng = wb.Worksheets(BED_SHEET).Range(cell)
+        value = OPTION_ON if on else off
+        put_value(rng, value, rng.NumberFormat)
+        return cell, value
+
+    @excel_action
+    def on_option(self, name):
+        on = self.option_vars[name].get()
+        try:
+            app, wb, ws = self.get_book()
+            cell, value = self.write_option(wb, name, on)
+        except Exception:
+            self.option_vars[name].set(not on)
+            self.paint_option(name)
+            raise
+        self.paint_option(name)
+        self.message(f"{BED_SHEET}: {name} → {cell} = „{value}“")
+
+    def reset_options(self, wb):
+        """Geänderte Optionen auf die Voreinstellung zurücksetzen (auch in Excel)."""
+        count = 0
+        for name, _cell, default, _off, _red in BED_OPTIONS:
+            if self.option_vars[name].get() != default:
+                self.write_option(wb, name, default)
+                self.option_vars[name].set(default)
+                self.paint_option(name)
+                count += 1
+        return count
+
+    def sync_options(self, wb):
+        """Haken so setzen, wie es gerade in "PRO Pflegebett" steht."""
+        bed = wb.Worksheets(BED_SHEET)
+        for name, cell, _default, _off, _red in BED_OPTIONS:
+            value = bed.Range(cell).Value2
+            on = str(value or "").strip().lower() == OPTION_ON.lower()
+            if self.option_vars[name].get() != on:
+                self.option_vars[name].set(on)
+                self.paint_option(name)
 
     def on_bed_button(self):
         self.bed.set(not self.bed.get())
@@ -1303,6 +1435,10 @@ class App:
         try:
             app, wb, ws = self.get_book()
             self.update_header_info(wb, ws)
+            try:
+                self.sync_options(wb)
+            except pywintypes.com_error:
+                pass
             try:
                 self.bed.set(wb.ActiveSheet.Name == BED_SHEET)
             except pywintypes.com_error:
