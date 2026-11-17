@@ -6,6 +6,7 @@ selbst enthält dafür keinerlei Makros oder Add-ins.
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -16,8 +17,10 @@ import urllib.error
 import urllib.request
 import webbrowser
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
+from logo_data import LOGO_PNG_B64
 from version import VERSION
 
 try:
@@ -57,9 +60,10 @@ FALLBACK_HEADERS = {
     "O": "Eigentümer", "P": "Reg.Nr.", "Q": "Mängel / Bemerkung",
     "R": "Mängelklasse", "S": "Stillgelegt",
 }
+FIELD_TITLE = {"R": "MK"}          # abweichende Überschrift im Eingabefeld
 FIELD_WIDTH = {
     "B": 11, "C": 14, "D": 20, "E": 16, "F": 18, "G": 6, "H": 6,
-    "J": 8, "O": 10, "P": 10, "Q": 36, "R": 7, "S": 8,
+    "J": 8, "O": 10, "P": 10, "Q": 36, "R": 5, "S": 8,
 }
 
 STATUS = {
@@ -72,10 +76,16 @@ STATUS = {
 COLOR_CHANGED = "#fff1b8"
 COLOR_FORMULA = "#ececec"
 COLOR_NORMAL = "#ffffff"
+FONT = "Segoe UI"
 
 XL_UP = -4162
 BUSY_CODES = {-2147418111, -2147417846, -2146777998}   # Excel beschäftigt
 NO_EXCEL_CODES = {-2147221021}                          # kein Excel offen
+
+NUMBER_RE = re.compile(r"-?(\d{1,3}(\.\d{3})+|\d+)(,\d+)?")
+DATE_RE = re.compile(r"\d{1,2}\.\d{1,2}\.(\d{2}|\d{4})")
+# Texte, die Excel sonst als Zahl, Datum oder Formel deuten würde
+RISKY_RE = re.compile(r"[=+\-@]|[\d\s.,:/%\-]+$")
 
 
 def col_index(letter):
@@ -103,6 +113,14 @@ def compute_status(q, r, s):
     if q or s:
         return "yellow"
     return "green"
+
+
+def parse_number(text):
+    """Deutsche Zahl ("1.234,5", "461") -> float, sonst None."""
+    t = text.strip()
+    if not NUMBER_RE.fullmatch(t):
+        return None
+    return float(t.replace(".", "").replace(",", "."))
 
 
 def parse_version(text):
@@ -181,8 +199,7 @@ class ExcelError(Exception):
 def com_message(err):
     code = err.args[0] if err.args else None
     if code in BUSY_CODES:
-        return ("Excel ist gerade beschäftigt – bitte eine laufende Zelleingabe in Excel "
-                "mit Enter oder Esc beenden und es erneut versuchen.")
+        return "Excel ist beschäftigt – Zelleingabe in Excel mit Enter oder Esc beenden."
     if code in NO_EXCEL_CODES:
         return "Excel ist nicht geöffnet."
     detail = ""
@@ -194,7 +211,7 @@ def com_message(err):
 
 
 def excel_action(fn):
-    """Fängt Excel-Fehler ab und zeigt sie in der Statuszeile an."""
+    """Fängt Excel-Fehler ab und zeigt sie in der Meldungszeile an."""
     def wrapper(self, *args, **kwargs):
         try:
             return fn(self, *args, **kwargs)
@@ -211,26 +228,23 @@ def excel_action(fn):
 # --------------------------------------------------------------------------
 # Zugriff auf Excel
 # --------------------------------------------------------------------------
-def get_book():
+def excel_app():
     try:
-        app = win32com.client.GetActiveObject("Excel.Application")
+        return win32com.client.GetActiveObject("Excel.Application")
     except pywintypes.com_error:
         raise ExcelError("Excel ist nicht geöffnet.")
-    books = []
-    try:
-        active = app.ActiveWorkbook
-        if active is not None:
-            books.append(active)
-    except pywintypes.com_error:
-        pass
+
+
+def list_books(app):
+    """Alle offenen Mappen mit dem Referenzblatt: [(Name, Mappe, Blatt)]."""
+    result = []
     for i in range(1, app.Workbooks.Count + 1):
-        books.append(app.Workbooks(i))
-    for wb in books:
+        wb = app.Workbooks(i)
         try:
-            return app, wb, wb.Worksheets(REF_SHEET)
+            result.append((wb.Name, wb, wb.Worksheets(REF_SHEET)))
         except pywintypes.com_error:
             continue
-    raise ExcelError(f"Keine geöffnete Liste mit dem Blatt „{REF_SHEET}“ gefunden.")
+    return result
 
 
 def find_rows(ws, wanted):
@@ -255,6 +269,137 @@ def read_row(ws, row):
     return result
 
 
+def snapshot(rng):
+    """Inhalt und Zahlenformat einer Zelle für "Rückgängig"."""
+    return rng.Value2, rng.NumberFormat
+
+
+def restore_number_format(rng, fmt):
+    if fmt is not None:
+        try:
+            if rng.NumberFormat != fmt:
+                rng.NumberFormat = fmt
+        except pywintypes.com_error:
+            pass
+
+
+def write_cell(rng, text):
+    """Schreibt einen Wert so, dass Datentyp und Zellformat erhalten bleiben.
+
+    - Zahl bleibt Zahl, Text bleibt Text (auch wenn er wie eine Zahl aussieht)
+    - Datum wird als Datum geschrieben
+    - Das Zahlenformat der Zelle wird danach wiederhergestellt
+    """
+    old, fmt = snapshot(rng)
+    t = text.strip()
+    if not t:
+        rng.ClearContents()
+    elif fmt == "@":                                    # Zelle ist als Text formatiert
+        rng.Value2 = text
+    else:
+        number = parse_number(t)
+        was_text = isinstance(old, str)
+        if number is not None and not was_text:
+            rng.Value2 = number
+        elif DATE_RE.fullmatch(t) and not was_text:
+            rng.FormulaLocal = t                        # Excel liest das Datum deutsch
+        elif RISKY_RE.match(t):
+            rng.Value2 = "'" + text                     # als Text erzwingen
+        else:
+            rng.Value2 = text
+    restore_number_format(rng, fmt)
+
+
+def restore_cell(rng, saved):
+    value, fmt = saved
+    if value is None or value == "":
+        rng.ClearContents()
+    elif isinstance(value, str) and RISKY_RE.match(value):
+        rng.Value2 = "'" + value
+    else:
+        rng.Value2 = value
+    restore_number_format(rng, fmt)
+
+
+# --------------------------------------------------------------------------
+# Zweizeiliges Eingabefeld
+# --------------------------------------------------------------------------
+class Field:
+    """Zweizeiliges Textfeld: einzeiliger Text steht vertikal mittig,
+    längerer Text wird automatisch umgebrochen."""
+
+    def __init__(self, parent, var, width, on_return, on_escape):
+        self.var = var
+        self.font = tkfont.Font(family=FONT, size=10)
+        self.text = tk.Text(parent, height=2, width=width, wrap="word", font=self.font,
+                            relief="solid", bd=1, padx=4, pady=1, undo=False,
+                            highlightthickness=1, highlightcolor="#3c7fd1",
+                            highlightbackground="#c8c8c8")
+        self.line_h = self.font.metrics("linespace")
+        self._busy = False
+        var.trace_add("write", self._from_var)
+        self.text.bind("<<Modified>>", self._from_text)
+        self.text.bind("<Configure>", lambda e: self.valign())
+        for key in ("<Return>", "<KP_Enter>"):
+            self.text.bind(key, on_return)
+        self.text.bind("<Escape>", lambda e: on_escape())
+        self.text.bind("<Tab>", self._next)
+        self.text.bind("<Shift-Tab>", self._prev)
+        self.text.bind("<ISO_Left_Tab>", self._prev)
+
+    def _next(self, event):
+        event.widget.tk_focusNext().focus_set()
+        return "break"
+
+    def _prev(self, event):
+        event.widget.tk_focusPrev().focus_set()
+        return "break"
+
+    def _from_var(self, *_):
+        if self._busy:
+            return
+        self._busy = True
+        state = self.text.cget("state")
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", self.var.get())
+        self.text.configure(state=state)
+        self.text.edit_modified(False)
+        self._busy = False
+        self.valign()
+
+    def _from_text(self, _event=None):
+        if not self.text.edit_modified():
+            return
+        self.text.edit_modified(False)
+        if self._busy:
+            return
+        content = self.text.get("1.0", "end-1c").replace("\r", "").replace("\n", " ")
+        self._busy = True
+        self.var.set(content)
+        self._busy = False
+        self.valign()
+
+    def valign(self):
+        try:
+            n = self.text.count("1.0", "end-1c", "displaylines")
+        except tk.TclError:
+            return
+        if isinstance(n, tuple):
+            n = n[0]
+        pad = self.line_h // 2 if not n else 0
+        self.text.tag_add("v", "1.0", "end")
+        self.text.tag_configure("v", spacing1=pad)
+
+    def set_look(self, readonly, bg):
+        self.text.configure(state="disabled" if readonly else "normal", bg=bg,
+                            takefocus=0 if readonly else 1)
+
+    def focus(self):
+        self.text.focus_set()
+        self.text.mark_set("insert", "end-1c")
+
+
 # --------------------------------------------------------------------------
 # Programmfenster
 # --------------------------------------------------------------------------
@@ -264,6 +409,7 @@ class App:
         self.cfg = load_config()
         self.headers = dict(FALLBACK_HEADERS)
         self.headers_loaded = False
+        self.selected_book = None
 
         self.row = None          # Excel-Zeile der geladenen Inv.-Nr.
         self.id_norm = ""
@@ -279,10 +425,14 @@ class App:
 
         self.topmost = tk.BooleanVar(value=bool(self.cfg.get("topmost", True)))
         self.bed = tk.BooleanVar(value=False)
+        self.book_var = tk.StringVar()
         self.update_result = None
         self.update_info = None
         self._layout_job = None
         self._last_width = 0
+
+        self.logo_full = tk.PhotoImage(data=LOGO_PNG_B64)
+        root.iconphoto(True, self.logo_full.subsample(4))
 
         self.build_ui()
         for c in SELECTABLE:
@@ -303,20 +453,31 @@ class App:
     # ---------------------------------------------------------------- Aufbau
     def build_ui(self):
         root = self.root
-        base = ("Segoe UI", 10)
-        root.option_add("*Font", base)
+        root.option_add("*Font", (FONT, 10))
         style = ttk.Style()
-        style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
-        style.configure("Update.TButton", foreground="#b3261e", font=("Segoe UI", 9, "bold"))
+        style.configure("Accent.TButton", font=(FONT, 10, "bold"))
+        style.configure("Update.TButton", foreground="#b3261e", font=(FONT, 9, "bold"))
+        style.configure("Bold.TCheckbutton", font=(FONT, 10, "bold"))
 
         outer = tk.Frame(root, padx=8, pady=5)
         outer.pack(fill="both", expand=True)
 
-        # Zeile 1: Dateiname | Meldung | Vordergrund, Version, Update
-        top = tk.Frame(outer)
+        # Kopf: Logo links, daneben zwei Zeilen
+        head = tk.Frame(outer)
+        head.pack(fill="x")
+        self.logo_label = tk.Label(head, bd=0)
+        self.logo_label.pack(side="left", padx=(0, 10))
+        rows = tk.Frame(head)
+        rows.pack(side="left", fill="x", expand=True)
+        self.head_rows = rows
+
+        # Zeile 1: Liste | Meldung | Bereich, Etage | Vordergrund, Version, Update
+        top = tk.Frame(rows)
         top.pack(fill="x")
-        self.file_label = tk.Label(top, text="– keine Liste geöffnet –", font=("Segoe UI", 11, "bold"))
-        self.file_label.pack(side="left")
+        self.book_combo = ttk.Combobox(top, textvariable=self.book_var, state="readonly",
+                                       width=34, font=(FONT, 11, "bold"))
+        self.book_combo.pack(side="left")
+        self.book_combo.bind("<<ComboboxSelected>>", self.on_book_selected)
         right = tk.Frame(top)
         right.pack(side="right")
         ttk.Checkbutton(right, text="Immer im Vordergrund", variable=self.topmost,
@@ -325,14 +486,22 @@ class App:
         self.update_btn = ttk.Button(right, text="Nach Updates suchen",
                                      command=self.on_update_button)
         self.update_btn.pack(side="left")
-        self.msg_label = tk.Label(top, text="", anchor="w", fg="#444")
-        self.msg_label.pack(side="left", fill="x", expand=True, padx=16)
+        self.msg_label = tk.Label(top, text="", anchor="w", fg="#444", width=58)
+        self.msg_label.pack(side="left", padx=(14, 8))
+        info = tk.Frame(top)
+        info.pack(side="left")
+        tk.Label(info, text="Bereich:").pack(side="left")
+        self.area_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=5, anchor="w")
+        self.area_label.pack(side="left", padx=(3, 10))
+        tk.Label(info, text="Etage:").pack(side="left")
+        self.floor_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=5, anchor="w")
+        self.floor_label.pack(side="left", padx=(3, 0))
 
-        # Zeile 2: Inv.-Nr., Status, Aktionen | Bereich, Etage
-        line = tk.Frame(outer)
-        line.pack(fill="x", pady=(5, 3))
-        tk.Label(line, text="Inventar-Nr.:", font=("Segoe UI", 11)).pack(side="left")
-        self.id_entry = tk.Entry(line, width=10, font=("Segoe UI", 14, "bold"), justify="center")
+        # Zeile 2: Inv.-Nr., Status, Aktionen
+        line = tk.Frame(rows)
+        line.pack(fill="x", pady=(5, 0))
+        tk.Label(line, text="Inventar-Nr.:", font=(FONT, 11, "bold")).pack(side="left")
+        self.id_entry = tk.Entry(line, width=10, font=(FONT, 14, "bold"), justify="center")
         self.id_entry.pack(side="left", padx=(6, 8))
         self.id_entry.bind("<Return>", self.load_id)
         self.id_entry.bind("<KP_Enter>", self.load_id)
@@ -341,7 +510,6 @@ class App:
         self.dot.pack(side="left")
         self.status_label = tk.Label(line, text="–", width=18, anchor="w")
         self.status_label.pack(side="left", padx=(4, 10))
-
         ttk.Button(line, text="Übernehmen", style="Accent.TButton",
                    command=self.commit).pack(side="left", padx=2)
         self.undo_btn = ttk.Button(line, text="Rückgängig", command=self.undo)
@@ -350,16 +518,7 @@ class App:
         ttk.Checkbutton(line, text="Daten Bett", style="Toolbutton", variable=self.bed,
                         command=self.toggle_bed).pack(side="left", padx=(10, 2))
 
-        info = tk.Frame(line)
-        info.pack(side="right")
-        tk.Label(info, text="Bereich:").pack(side="left")
-        self.area_label = tk.Label(info, text="–", font=("Segoe UI", 12, "bold"), width=6, anchor="w")
-        self.area_label.pack(side="left", padx=(3, 12))
-        tk.Label(info, text="Etage:").pack(side="left")
-        self.floor_label = tk.Label(info, text="–", font=("Segoe UI", 12, "bold"), width=6, anchor="w")
-        self.floor_label.pack(side="left", padx=(3, 0))
-
-        ttk.Separator(outer).pack(fill="x", pady=3)
+        ttk.Separator(outer).pack(fill="x", pady=4)
 
         # Zeile 3: Auswahlschiene
         self.rail = tk.Frame(outer)
@@ -367,12 +526,12 @@ class App:
         self.rail_widgets = [tk.Label(self.rail, text="Anzeigen:", fg="#666")]
         self.check_widgets = {}
         for c in SELECTABLE:
-            cb = ttk.Checkbutton(self.rail, variable=self.show_vars[c],
+            cb = ttk.Checkbutton(self.rail, variable=self.show_vars[c], style="Bold.TCheckbutton",
                                  command=lambda c=c: self.on_check(c))
             self.check_widgets[c] = cb
             self.rail_widgets.append(cb)
 
-        ttk.Separator(outer).pack(fill="x", pady=3)
+        ttk.Separator(outer).pack(fill="x", pady=4)
 
         # Zeile 4: Felder
         self.fields = tk.Frame(outer)
@@ -380,27 +539,31 @@ class App:
         self.field_frames, self.field_labels, self.entries = {}, {}, {}
         for c in SELECTABLE:
             fr = tk.Frame(self.fields)
-            lb = tk.Label(fr, anchor="w", fg="#555", font=("Segoe UI", 8))
+            lb = tk.Label(fr, anchor="w", fg="#333", font=(FONT, 9, "bold"))
             lb.pack(fill="x")
-            en = tk.Entry(fr, textvariable=self.vars[c], width=FIELD_WIDTH.get(c, 12),
-                          bg=COLOR_NORMAL, readonlybackground=COLOR_FORMULA, relief="solid", bd=1)
-            en.pack(fill="x", ipady=2)
-            en.bind("<Return>", self.commit)
-            en.bind("<KP_Enter>", self.commit)
-            en.bind("<Escape>", lambda e: self.focus_id())
-            self.field_frames[c], self.field_labels[c], self.entries[c] = fr, lb, en
+            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit, self.focus_id)
+            field.text.pack(fill="x")
+            self.field_frames[c], self.field_labels[c], self.entries[c] = fr, lb, field
         self.apply_headers()
 
     def apply_headers(self):
         for c in SELECTABLE:
             name = self.headers.get(c, c)
-            self.check_widgets[c].configure(text=f"{c} {name}")
+            self.check_widgets[c].configure(text=f"{c} · {name}")
             suffix = "  (Formel)" if self.formula[c] else ""
-            self.field_labels[c].configure(text=f"{c} · {name}{suffix}")
+            self.field_labels[c].configure(text=f"{c} · {FIELD_TITLE.get(c, name)}{suffix}")
+
+    def size_logo(self):
+        """Logo so groß wie die beiden Kopfzeilen."""
+        self.root.update_idletasks()
+        h = max(24, self.head_rows.winfo_reqheight())
+        factor = max(1, math.ceil(self.logo_full.height() / h))
+        self.logo_small = self.logo_full.subsample(factor)
+        self.logo_label.configure(image=self.logo_small)
 
     # ---------------------------------------------------------- Fenstergröße
     def place_initial(self):
-        self.root.update_idletasks()
+        self.size_logo()
         left, top, right, bottom = work_area(self.root)
         width = right - left
         self.relayout(width - 16, fit=False)
@@ -429,7 +592,7 @@ class App:
     def relayout(self, width, fit=True):
         width = max(width, 300)
         self.root.update_idletasks()
-        flow_place(self.rail, self.rail_widgets, width, gap_x=10)
+        flow_place(self.rail, self.rail_widgets, width, gap_x=12)
         shown = [self.field_frames[c] for c in SELECTABLE if self.show_vars[c].get()]
         flow_place(self.fields, shown, width)
         if fit:
@@ -507,13 +670,11 @@ class App:
             self.set_status(compute_status(*(self.vars[x].get() for x in AUTO_COLS)))
 
     def paint_entry(self, c):
-        en = self.entries[c]
         if self.formula[c]:
-            en.configure(state="readonly")
+            self.entries[c].set_look(True, COLOR_FORMULA)
         else:
-            en.configure(state="normal")
             changed = self.row is not None and self.vars[c].get() != self.orig[c]
-            en.configure(bg=COLOR_CHANGED if changed else COLOR_NORMAL)
+            self.entries[c].set_look(False, COLOR_CHANGED if changed else COLOR_NORMAL)
 
     def fill(self, data):
         self.loading = True
@@ -522,7 +683,6 @@ class App:
                 text, is_formula, shown = data[c] if data else ("", False, "")
                 self.orig[c] = text
                 self.formula[c] = is_formula
-                self.entries[c].configure(state="normal")
                 self.vars[c].set(shown if is_formula else text)
         finally:
             self.loading = False
@@ -541,7 +701,60 @@ class App:
         return [c for c in SELECTABLE
                 if not self.formula[c] and self.vars[c].get() != self.orig[c]]
 
+    def clear_loaded(self):
+        self.row = None
+        self.id_norm = self.id_label = ""
+        self.reset_auto()
+        self.fill(None)
+
     # ---------------------------------------------------------- Excel-Aktionen
+    def get_book(self):
+        """Die im Auswahlmenü gewählte Liste (oder die aktive / erste offene)."""
+        app = excel_app()
+        books = list_books(app)
+        if not books:
+            raise ExcelError(f"Keine geöffnete Liste mit dem Blatt „{REF_SHEET}“ gefunden.")
+        names = [n for n, _, _ in books]
+        if self.selected_book not in names:
+            active = None
+            try:
+                active = app.ActiveWorkbook.Name if app.ActiveWorkbook is not None else None
+            except pywintypes.com_error:
+                pass
+            self.selected_book = active if active in names else names[0]
+            self.headers_loaded = False
+        if list(self.book_combo["values"]) != names:
+            self.book_combo["values"] = names
+        if self.book_var.get() != self.selected_book:
+            self.book_var.set(self.selected_book)
+        _, wb, ws = books[names.index(self.selected_book)]
+        if not self.headers_loaded:
+            self.load_headers(ws)
+        return app, wb, ws
+
+    @excel_action
+    def on_book_selected(self, event=None):
+        name = self.book_var.get()
+        if name == self.selected_book:
+            return self.focus_id()
+        if self.changed_cols() and not messagebox.askyesno(
+                "Ungespeicherte Änderungen",
+                f"Die Änderungen bei Inv.-Nr. {self.id_label} wurden noch nicht übernommen.\n\n"
+                "Verwerfen und Liste wechseln?", parent=self.root):
+            self.book_var.set(self.selected_book)
+            return self.focus_id()
+        self.selected_book = name
+        self.headers_loaded = False
+        self.clear_loaded()
+        self.undo_stack.clear()
+        self.update_undo_button()
+        app, wb, ws = self.get_book()
+        wb.Activate()
+        self.bed.set(False)
+        self.update_header_info(wb, ws)
+        self.message(f"Liste „{name}“ ausgewählt.")
+        return self.focus_id()
+
     def show_row(self, app, wb, ws, row):
         """Zeile A–S auswählen und als 2. Zeile des scrollbaren Bereichs anzeigen."""
         if app.ActiveWorkbook is None or app.ActiveWorkbook.Name != wb.Name:
@@ -565,6 +778,7 @@ class App:
 
     def load_headers(self, ws):
         values = ws.Range(f"A{HEADER_ROW}:{LAST_COL}{HEADER_ROW}").Value2[0]
+        self.headers = dict(FALLBACK_HEADERS)
         for col, v in zip(all_cols(), values):
             if v not in (None, ""):
                 self.headers[col] = clean_header(v)
@@ -577,22 +791,17 @@ class App:
         raw = self.id_entry.get().strip()
         if not raw:
             return "break"
-        pending = self.changed_cols()
-        if pending and not messagebox.askyesno(
+        if self.changed_cols() and not messagebox.askyesno(
                 "Ungespeicherte Änderungen",
                 f"Die Änderungen bei Inv.-Nr. {self.id_label} wurden noch nicht übernommen.\n\n"
                 "Verwerfen und neue Inventarnummer laden?", parent=self.root):
             return "break"
 
-        app, wb, ws = get_book()
-        if not self.headers_loaded:
-            self.load_headers(ws)
+        app, wb, ws = self.get_book()
         self.reset_auto()
         rows = find_rows(ws, norm_id(raw))
         if not rows:
-            self.row = None
-            self.id_norm = self.id_label = ""
-            self.fill(None)
+            self.clear_loaded()
             self.message(f"Inv.-Nr. {raw} wurde nicht gefunden.", error=True)
             return self.focus_id()
 
@@ -606,8 +815,8 @@ class App:
 
         if len(rows) > 1:
             others = ", ".join(str(r) for r in rows)
-            self.message(f"Achtung: Inv.-Nr. {raw} kommt {len(rows)}× vor (Zeilen {others}) "
-                         f"– bearbeitet wird Zeile {row}.", error=True)
+            self.message(f"Inv.-Nr. {raw} kommt {len(rows)}× vor (Zeilen {others}) – "
+                         f"bearbeitet: Zeile {row}.", error=True)
         else:
             self.message(f"Inv.-Nr. {raw} geladen (Zeile {row}).")
         self.root.after(30, self.focus_first_field)
@@ -617,8 +826,7 @@ class App:
         self.root.focus_force()
         for c in SELECTABLE:
             if self.show_vars[c].get() and not self.formula[c]:
-                self.entries[c].focus_set()
-                self.entries[c].icursor("end")
+                self.entries[c].focus()
                 return
         self.focus_id()
 
@@ -627,7 +835,7 @@ class App:
         if self.row is None:
             self.message("Bitte zuerst eine Inventarnummer eingeben.", error=True)
             return self.focus_id()
-        app, wb, ws = get_book()
+        app, wb, ws = self.get_book()
         row = self.locate(ws)
         current = read_row(ws, row)
         changes = self.changed_cols()
@@ -642,11 +850,10 @@ class App:
                 return "break"
 
         undo = {"row": row, "id_norm": self.id_norm, "label": self.id_label, "cells": []}
-        for c in changes:
-            undo["cells"].append((c, current[c][0]))
-            ws.Range(f"{c}{row}").FormulaLocal = self.vars[c].get()
-        undo["cells"].append((DONE_COL, current[DONE_COL][0]))
-        ws.Range(f"{DONE_COL}{row}").Value2 = DONE_MARK
+        for c in changes + [DONE_COL]:
+            rng = ws.Range(f"{c}{row}")
+            undo["cells"].append((c, snapshot(rng)))
+            write_cell(rng, DONE_MARK if c == DONE_COL else self.vars[c].get())
         self.undo_stack.append(undo)
         del self.undo_stack[:-50]
         self.update_undo_button()
@@ -668,15 +875,15 @@ class App:
                 f"Letzte Übernahme für Inv.-Nr. {u['label']} rückgängig machen?\n"
                 f"({len(u['cells'])} Zellen werden auf den alten Stand gesetzt.)", parent=self.root):
             return
-        app, wb, ws = get_book()
+        app, wb, ws = self.get_book()
         row = u["row"]
         if norm_id(ws.Cells(row, 1).Value2) != u["id_norm"]:
             rows = find_rows(ws, u["id_norm"])
             if not rows:
                 raise ExcelError(f"Inv.-Nr. {u['label']} ist nicht mehr in der Liste.")
             row = rows[0]
-        for c, old in u["cells"]:
-            ws.Range(f"{c}{row}").FormulaLocal = old
+        for c, saved in u["cells"]:
+            restore_cell(ws.Range(f"{c}{row}"), saved)
         self.undo_stack.pop()
         self.update_undo_button()
         if self.id_norm == u["id_norm"]:
@@ -690,7 +897,7 @@ class App:
 
     @excel_action
     def save_book(self):
-        app, wb, ws = get_book()
+        app, wb, ws = self.get_book()
         wb.Save()
         self.message(f"„{wb.Name}“ gespeichert.")
         return "break"
@@ -698,7 +905,7 @@ class App:
     def toggle_bed(self):
         wanted = self.bed.get()
         try:
-            app, wb, ws = get_book()
+            app, wb, ws = self.get_book()
             if app.ActiveWorkbook is None or app.ActiveWorkbook.Name != wb.Name:
                 wb.Activate()
             if wanted:
@@ -718,23 +925,22 @@ class App:
         self.focus_id()
 
     def update_header_info(self, wb, ws):
-        self.file_label.configure(text=wb.Name)
         self.area_label.configure(text=str(ws.Range(AREA_CELL).Text or "–"))
         self.floor_label.configure(text=str(ws.Range(FLOOR_CELL).Text or "–"))
 
     def poll(self):
-        """Dateiname, Bereich und Etage regelmäßig aktualisieren (nur lesend)."""
+        """Listenauswahl, Bereich und Etage regelmäßig aktualisieren (nur lesend)."""
         try:
-            app, wb, ws = get_book()
-            if not self.headers_loaded:
-                self.load_headers(ws)
+            app, wb, ws = self.get_book()
             self.update_header_info(wb, ws)
             try:
                 self.bed.set(wb.ActiveSheet.Name == BED_SHEET)
             except pywintypes.com_error:
                 pass
         except ExcelError:
-            self.file_label.configure(text="– keine Liste geöffnet –")
+            self.book_combo["values"] = []
+            self.book_var.set("– keine Liste geöffnet –")
+            self.selected_book = None
         except Exception:
             pass   # Excel beschäftigt – beim nächsten Mal wieder versuchen
         self.root.after(2000, self.poll)

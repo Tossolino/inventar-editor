@@ -41,7 +41,7 @@ jobs:
 
       - name: EXE bauen
         if: steps.v.outputs.neu == 'true'
-        run: pyinstaller --onefile --windowed --name InventarEditor --hidden-import win32timezone inventar_editor.py
+        run: pyinstaller --onefile --windowed --name InventarEditor --hidden-import win32timezone --icon assets/logo.png inventar_editor.py
 
       - name: Release veröffentlichen
         if: steps.v.outputs.neu == 'true'
