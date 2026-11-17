@@ -1,0 +1,54 @@
+name: Windows-Programm bauen
+
+# Bei jedem Push auf main: Ist die Version in version.py neu,
+# wird InventarEditor.exe gebaut und als Release veröffentlicht.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version prüfen
+        id: v
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(python -c "import version; print(version.VERSION)")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "$V" >/dev/null 2>&1; then
+            echo "Release $V existiert schon – nichts zu tun."
+            echo "neu=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "neu=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abhängigkeiten installieren
+        if: steps.v.outputs.neu == 'true'
+        run: pip install -r requirements.txt
+
+      - name: EXE bauen
+        if: steps.v.outputs.neu == 'true'
+        run: pyinstaller --onefile --windowed --name InventarEditor --hidden-import win32timezone inventar_editor.py
+
+      - name: Release veröffentlichen
+        if: steps.v.outputs.neu == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git log -1 --pretty=%B > notes.txt
+          gh release create "${{ steps.v.outputs.version }}" dist/InventarEditor.exe \
+            --title "${{ steps.v.outputs.version }}" --notes-file notes.txt
