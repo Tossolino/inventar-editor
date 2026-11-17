@@ -40,7 +40,17 @@ GITHUB_REPO = "inventar-editor"
 ASSET_NAME = "InventarEditor.exe"
 
 REF_SHEET = "akt. Med.-Produkte"   # Referenzblatt
-BED_SHEET = "PRO Pflegebett"       # Blatt für "Daten Bett"
+BED_SHEET = "PRO Pflegebett"       # Prüfprotokoll Pflegebett (Typenliste, Haken)
+# Kacheln für Prüfprotokolle: (Beschriftung, Tabellenblatt)
+# Druckersymbol links = Schnelldruck, Text = zum Blatt wechseln
+SHEET_TILES = [
+    ("Pflegebett", "PRO Pflegebett"),
+    ("Med.Produkte", "PRO Med.-Produkte"),
+    ("O2", "PRO O2-Konz"),
+]
+# Auswahl "Geräteart" im Typ-Fenster -> C (Geräteart), dazu H = "CE"
+DEVICE_TYPES = ["Pflegebett", "O2-Konzentrator", "Absauggerät", "O2-Armatur",
+                "Aufstehhilfe", "Patientenlifter", "Sitzwaage"]
 HEADER_ROW = 6                     # Überschriften
 FIRST_ROW = 7                      # erste Datenzeile
 LAST_COL = "S"                     # Zeile wird von A bis S markiert
@@ -689,8 +699,10 @@ class TypeDialog:
 
         body = tk.Frame(top, padx=12, pady=10)
         body.pack(fill="both", expand=True)
+        tk.Label(body, text="Bettentyp", font=(FONT, 14, "bold"), anchor="w").pack(fill="x")
         tk.Label(body, text=f"Für Inv.-Nr. {id_label} ist noch kein Typ (E) eingetragen.\n"
-                            "Bitte den Bett-Typ auswählen:",
+                            "Bitte den Bett-Typ auswählen – oder unten eine andere "
+                            "Geräteart wählen:",
                  justify="left", anchor="w").pack(fill="x")
         search_line = tk.Frame(body)
         search_line.pack(fill="x", pady=(8, 4))
@@ -719,6 +731,11 @@ class TypeDialog:
         ttk.Button(buttons, text="Abbrechen", command=self.cancel).pack(side="right")
         ttk.Button(buttons, text="OK", style="Accent.TButton",
                    command=self.ok).pack(side="right", padx=(0, 6))
+        self.device_btn = ttk.Button(buttons, text="Geräteart ▾", command=self.show_devices)
+        self.device_btn.pack(side="right", padx=(0, 6))
+        self.device_menu = tk.Menu(top, tearoff=False, font=(FONT, 11))
+        for name in DEVICE_TYPES:
+            self.device_menu.add_command(label=name, command=lambda n=name: self.choose_device(n))
 
         for w in (top, entry, self.tree):
             w.bind("<Return>", lambda e: self.ok())
@@ -756,9 +773,17 @@ class TypeDialog:
         sel = self.tree.selection()
         if not sel:
             return "break"
-        self.result = self.types[int(sel[0])]
+        self.result = ("type", self.types[int(sel[0])])
         self.top.destroy()
         return "break"
+
+    def show_devices(self):
+        b = self.device_btn
+        self.device_menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def choose_device(self, name):
+        self.result = ("device", name)
+        self.top.destroy()
 
     def cancel(self):
         self.result = None
@@ -790,7 +815,8 @@ class App:
         self.status = None
 
         self.topmost = tk.BooleanVar(value=bool(self.cfg.get("topmost", True)))
-        self.bed = tk.BooleanVar(value=False)
+        self.sheet_var = tk.StringVar(value="")   # aktives Protokoll-Blatt ("" = Liste)
+        self._print_locked = False
         self.book_var = tk.StringVar()
         self.update_result = None
         self.update_info = None
@@ -893,18 +919,26 @@ class App:
         save_btn = ttk.Button(group, image=self.save_icon, command=self.save_book, width=3)
         save_btn.pack(side="left", padx=2)
         Tooltip(save_btn, "Liste speichern (Strg+S)")
-        self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
-        self.print_btn = ttk.Button(group, image=self.print_icon, width=3,
-                                    command=self.quick_print)
-        self.print_btn.pack(side="left", padx=2)
-        Tooltip(self.print_btn, f"Schnelldruck „{BED_SHEET}“")
 
-        self.bed_btn = tk.Button(actions, text=BED_SHEET, font=(FONT, 10), relief="raised", bd=1,
-                                 padx=10, pady=3, cursor="hand2", command=self.on_bed_button)
-        self.bed_btn.pack(side="left", padx=(12, 0))
-        self.bed_default = (self.bed_btn.cget("bg"), self.bed_btn.cget("fg"),
-                            self.bed_btn.cget("activebackground"))
-        self.bed.trace_add("write", lambda *_: self.paint_bed_button())
+        # Kacheln: [Drucker | Text] je Prüfprotokoll
+        self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
+        self.tiles = {}
+        for i, (label, sheet) in enumerate(SHEET_TILES):
+            tile = tk.Frame(actions, relief="raised", bd=1)
+            tile.pack(side="left", padx=(12 if i == 0 else 6, 0))
+            icon = tk.Label(tile, image=self.print_icon, padx=6, pady=4, cursor="hand2")
+            icon.pack(side="left")
+            sep = tk.Frame(tile, width=1, bg="#a0a0a0")
+            sep.pack(side="left", fill="y", pady=4)
+            text = tk.Label(tile, text=label, font=(FONT, 10), padx=10, pady=4, cursor="hand2")
+            text.pack(side="left")
+            icon.bind("<Button-1>", lambda e, s=sheet: self.quick_print(s))
+            text.bind("<Button-1>", lambda e, s=sheet: self.on_sheet_tile(s))
+            Tooltip(icon, f"Schnelldruck „{sheet}“")
+            Tooltip(text, f"Zum Blatt „{sheet}“ wechseln")
+            self.tiles[sheet] = (tile, icon, text)
+        self.tile_default = (actions.cget("bg"), "black")
+        self.sheet_var.trace_add("write", lambda *_: self.paint_tiles())
 
         # Optionen für "PRO Pflegebett" (zweizeilig)
         opts = tk.Frame(rows)
@@ -1207,7 +1241,7 @@ class App:
         self.update_undo_button()
         app, wb, ws = self.get_book()
         wb.Activate()
-        self.bed.set(False)
+        self.sheet_var.set("")
         self.update_header_info(wb, ws)
         self.message(f"Liste „{name}“ ausgewählt.")
         return self.focus_id()
@@ -1276,7 +1310,7 @@ class App:
             wb.Activate()
         if wb.ActiveSheet.Name != ws.Name:       # z.B. von "PRO Pflegebett" zurück
             ws.Activate()
-        self.bed.set(False)
+        self.sheet_var.set("")
         self.show_row(app, wb, ws, row)
         self.update_header_info(wb, ws)
         no_type = not data[TYPE_COL][0].strip()        # E (Typ/Modell) leer
@@ -1334,10 +1368,16 @@ class App:
         if choice is None:
             self.message(f"Inv.-Nr. {self.id_label}: kein Typ ausgewählt.")
             return self.focus_first_field()
-        typ, maker = choice
-        # D und E kommen immer aus der Auswahl; C, H und O nur, wenn sie noch leer sind
-        values = {c: v for c, v in NEW_BED_VALUES.items() if not self.vars[c].get().strip()}
-        values.update(D=maker, E=typ)
+        kind, picked = choice
+        if kind == "device":                       # andere Geräteart: nur C und H
+            values = {"C": picked, "H": "CE"}
+            info = f"Geräteart „{picked}“ eingetragen"
+        else:
+            typ, maker = picked
+            # D und E kommen immer aus der Auswahl; C, H und O nur, wenn sie noch leer sind
+            values = {c: v for c, v in NEW_BED_VALUES.items() if not self.vars[c].get().strip()}
+            values.update(D=maker, E=typ)
+            info = f"Neues Bett: {maker} {typ} eingetragen"
         for c in SELECTABLE:
             if c in values:
                 self.vars[c].set(values[c])
@@ -1345,7 +1385,7 @@ class App:
                     self.show_vars[c].set(True)
                     self.auto_shown.add(c)
         self.schedule_layout()
-        self.message(f"Neues Bett: {maker} {typ} eingetragen – mit „Übernehmen“ speichern.")
+        self.message(f"{info} – mit „Übernehmen“ speichern.")
         self.root.after(30, self.focus_first_field)
         return "break"
 
@@ -1530,20 +1570,22 @@ class App:
                 hits.append(name)
         return hits
 
-    def quick_print(self):
-        """Wie "Schnelldruck" in Excel: Blatt PRO Pflegebett mit 1 Kopie auf den
-        Standarddrucker (Druckbereich des Blatts)."""
-        self.print_btn.configure(state="disabled")      # Doppelklick-Schutz
-        self.root.after(3000, lambda: self.print_btn.configure(state="normal"))
-        self._quick_print()
+    def quick_print(self, sheet):
+        """Wie "Schnelldruck" in Excel: Blatt mit 1 Kopie auf den Standarddrucker
+        (Druckbereich des Blatts)."""
+        if self._print_locked:                          # Doppelklick-Schutz
+            return
+        self._print_locked = True
+        self.root.after(3000, lambda: setattr(self, "_print_locked", False))
+        self._quick_print(sheet)
 
     @excel_action
-    def _quick_print(self):
+    def _quick_print(self, sheet):
         app, wb, ws = self.get_book()
         if self.row is None:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
-        wb.Worksheets(BED_SHEET).PrintOut()
-        self.message(f"„{BED_SHEET}“ für Inv.-Nr. {self.id_label} an den Drucker gesendet.")
+        wb.Worksheets(sheet).PrintOut()
+        self.message(f"„{sheet}“ für Inv.-Nr. {self.id_label} an den Drucker gesendet.")
         return self.focus_id()
 
     @excel_action
@@ -1649,39 +1691,37 @@ class App:
                 self.option_vars[name].set(on)
                 self.paint_option(name)
 
-    def on_bed_button(self):
-        self.bed.set(not self.bed.get())
-        self.toggle_bed()
+    def paint_tiles(self):
+        active = self.sheet_var.get()
+        bg, fg = self.tile_default
+        for sheet, (tile, icon, text) in self.tiles.items():
+            on = sheet == active
+            color = "#2e9e44" if on else bg
+            tile.configure(bg=color, relief="sunken" if on else "raised")
+            icon.configure(bg=color)
+            text.configure(bg=color, fg="white" if on else fg,
+                           font=(FONT, 10, "bold") if on else (FONT, 10))
 
-    def paint_bed_button(self):
-        if self.bed.get():
-            self.bed_btn.configure(bg="#2e9e44", fg="white", activebackground="#25803a",
-                                   activeforeground="white", font=(FONT, 10, "bold"),
-                                   relief="sunken")
-        else:
-            bg, fg, abg = self.bed_default
-            self.bed_btn.configure(bg=bg, fg=fg, activebackground=abg, activeforeground=fg,
-                                   font=(FONT, 10), relief="raised")
-
-    def toggle_bed(self):
-        wanted = self.bed.get()
+    def on_sheet_tile(self, sheet):
+        """Text der Kachel: zum Blatt wechseln – ist es schon aktiv (grün), zurück zur Liste."""
+        back = self.sheet_var.get() == sheet
         try:
             app, wb, ws = self.get_book()
             if app.ActiveWorkbook is None or app.ActiveWorkbook.Name != wb.Name:
                 wb.Activate()
-            if wanted:
-                wb.Worksheets(BED_SHEET).Activate()
-                self.message(f"Blatt „{BED_SHEET}“ angezeigt.")
-            else:
+            if back:
                 ws.Activate()
+                self.sheet_var.set("")
                 if self.row is not None:
                     self.show_row(app, wb, ws, self.locate(ws))
                 self.message(f"Zurück zu „{REF_SHEET}“.")
+            else:
+                wb.Worksheets(sheet).Activate()
+                self.sheet_var.set(sheet)
+                self.message(f"Blatt „{sheet}“ angezeigt.")
         except ExcelError as e:
-            self.bed.set(not wanted)
             self.message(str(e), error=True)
         except pywintypes.com_error as e:
-            self.bed.set(not wanted)
             self.message(com_message(e), error=True)
         self.focus_id()
 
@@ -1769,7 +1809,10 @@ class App:
             except pywintypes.com_error:
                 pass
             try:
-                self.bed.set(wb.ActiveSheet.Name == BED_SHEET)
+                active = wb.ActiveSheet.Name
+                wanted = active if active in self.tiles else ""
+                if self.sheet_var.get() != wanted:
+                    self.sheet_var.set(wanted)
             except pywintypes.com_error:
                 pass
         except ExcelError:
