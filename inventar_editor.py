@@ -74,7 +74,9 @@ FLOOR_TARGET_COL = "I"         # Etage  (aus C2)
 AREA_TARGET_COL = "K"          # Wohnbereich (aus B2)
 CHECK_DATE_COL = "L"           # letzte STK  = Prüfdatum
 NEXT_DATE_COL = "N"            # nächste STK = Prüfdatum + 1 Jahr
-DATE_FORMAT = "[$-407]mmm/ yy;@"   # wie in der Vorlage: "Nov. 26"
+# Fehlerhaftes Format aus V1.013.26 (wurde von deutschem Excel als „00/ yy“ gelesen)
+BROKEN_DATE_FORMAT = "[$-407]mmm/ yy;@"
+DATE_SERIAL_RANGE = (36526, 73051)  # 2000 … 2099: Zahlen in diesem Bereich sind Datumswerte
 MONTHS = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sep.", "Okt.",
           "Nov.", "Dez."]
 OPTIONS_TOP_ROW = 3        # obere Reihe: die ersten 3, darunter der Rest
@@ -351,6 +353,54 @@ def excel_date(value):
         if serial is not None:
             return excel_date(serial)
     return None
+
+
+def column_date_format(ws, col, last):
+    """Häufigstes Zahlenformat der Datumszellen einer Spalte (so, wie Excel es liefert)."""
+    if last < FIRST_ROW:
+        return None
+    values = ws.Range(f"{col}{FIRST_ROW}:{col}{last}").Value2
+    if not isinstance(values, tuple):
+        values = ((values,),)
+    counts = {}
+    for i, (v,) in enumerate(values):
+        if is_number(v) and DATE_SERIAL_RANGE[0] <= v <= DATE_SERIAL_RANGE[1]:
+            fmt = ws.Range(f"{col}{FIRST_ROW + i}").NumberFormat
+            if fmt and fmt != BROKEN_DATE_FORMAT and fmt not in ("General", "Standard", "@"):
+                counts[fmt] = counts.get(fmt, 0) + 1
+            if sum(counts.values()) >= 25:      # Stichprobe genügt
+                break
+    return max(counts, key=counts.get) if counts else None
+
+
+def has_year_token(fmt):
+    """Enthält ein Zahlenformat ein Jahr (engl. "y" oder dt. "J")? Text in Anführungs-
+    zeichen, mit \\ geschützte Zeichen und [...]-Angaben zählen nicht."""
+    core = re.sub(r'"[^"]*"|\\.|\[[^\]]*\]', "", str(fmt or "")).lower()
+    return "y" in core or "j" in core
+
+
+def repair_date_formats(ws, last, date_fmt, undo):
+    """Zellen mit dem fehlerhaften Format aus V1.013.26 wieder richtig formatieren."""
+    repaired = 0
+    for col, good in date_fmt.items():
+        if not good or last < FIRST_ROW:
+            continue
+        for row in range(FIRST_ROW, last + 1):
+            rng = ws.Range(f"{col}{row}")
+            fmt = rng.NumberFormat
+            value = rng.Value2
+            is_date_value = is_number(value) and DATE_SERIAL_RANGE[0] <= value <= DATE_SERIAL_RANGE[1]
+            if fmt == BROKEN_DATE_FORMAT or (is_date_value and fmt != good
+                                             and not has_year_token(fmt)
+                                             and fmt not in ("General", "Standard", "@")):
+                undo["cells"].append((f"{col}{row}", snapshot(rng)))
+                try:
+                    rng.NumberFormat = good
+                    repaired += 1
+                except pywintypes.com_error:
+                    pass
+    return repaired
 
 
 def add_year(day):
@@ -751,6 +801,7 @@ class App:
 
         self.marker = RowMarker(root)
         self.temp_mark = None    # vorläufiges "x" in L: {book, row, id_norm, saved}
+        self.repaired_books = set()
         self._ctx = None         # (app, wb, ws) der zuletzt benutzten Liste
 
         self.build_ui()
@@ -1108,7 +1159,27 @@ class App:
         if not self.headers_loaded:
             self.load_headers(ws)
         self._ctx = (app, wb, ws)
+        if wb.Name not in self.repaired_books:
+            self.repaired_books.add(wb.Name)
+            self.repair_once(wb, ws)
         return app, wb, ws
+
+    def repair_once(self, wb, ws):
+        """Einmal pro Liste: fehlerhafte Datumsformate aus V1.013.26 reparieren."""
+        try:
+            last = ws.Cells(ws.Rows.Count, 1).End(XL_UP).Row
+            cover_fmt = wb.Worksheets(COVER_SHEET).Range(COVER_DATE_CELL).NumberFormat
+            date_fmt = {col: column_date_format(ws, col, last) or cover_fmt
+                        for col in (CHECK_DATE_COL, NEXT_DATE_COL)}
+            undo = {"kind": "bulk", "label": "Reparatur der Datumsformate", "cells": []}
+            repaired = repair_date_formats(ws, last, date_fmt, undo)
+        except (pywintypes.com_error, ExcelError):
+            return
+        if repaired:
+            self.undo_stack.append(undo)
+            self.update_undo_button()
+            self.message(f"{repaired} fehlerhafte Datumsformate in {CHECK_DATE_COL}/"
+                         f"{NEXT_DATE_COL} repariert.")
 
     @excel_action
     def on_book_selected(self, event=None):
@@ -1492,6 +1563,11 @@ class App:
                 "Jetzt eintragen?", parent=self.root):
             return
 
+        # Datumsformat nicht selbst vorgeben (Excel deutet Formatcodes je nach Sprache
+        # unterschiedlich), sondern von vorhandenen Datumszellen der Spalte übernehmen.
+        cover_fmt = wb.Worksheets(COVER_SHEET).Range(COVER_DATE_CELL).NumberFormat
+        date_fmt = {col: column_date_format(ws, col, last) or cover_fmt
+                    for col in (CHECK_DATE_COL, NEXT_DATE_COL)}
         undo = {"kind": "bulk", "label": f"Etage abschließen ({len(rows)} Zeilen)", "cells": []}
         values = [(FLOOR_TARGET_COL, floor, False), (AREA_TARGET_COL, area, False),
                   (CHECK_DATE_COL, to_serial(check), True),
@@ -1507,11 +1583,12 @@ class App:
                     saved = snapshot(rng)
                     undo["cells"].append((f"{col}{row}", saved))
                     put_value(rng, value, saved[1])
-                    if is_date and "y" not in str(saved[1] or "").lower():
-                        try:                      # Zelle hatte kein Datumsformat
-                            rng.NumberFormat = DATE_FORMAT
+                    if is_date and date_fmt[col] and rng.NumberFormat != date_fmt[col]:
+                        try:
+                            rng.NumberFormat = date_fmt[col]
                         except pywintypes.com_error:
                             pass
+            repaired = repair_date_formats(ws, last, date_fmt, undo)
         finally:
             try:
                 app.ScreenUpdating = True
@@ -1521,8 +1598,9 @@ class App:
         del self.undo_stack[:-50]
         self.update_undo_button()
         self.clear_loaded()
+        fixed = f" ({repaired} Datumsformat(e) repariert)" if repaired else ""
         self.message(f"Etage abgeschlossen: {len(rows)} Zeile(n) – Etage {show(floor)}, "
-                     f"Bereich {show(area)}, {month_text(check)} / {month_text(next_check)}.")
+                     f"Bereich {show(area)}, {month_text(check)} / {month_text(next_check)}{fixed}.")
         return self.focus_id()
 
     def reset_options(self, wb):
