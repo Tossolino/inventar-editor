@@ -68,6 +68,15 @@ BED_OPTIONS = [
     ("Furnierschaden", "G46", True, "Nein", True),
 ]
 OPTION_ON = "Ja"
+# "Etage abschließen": alle Zeilen mit "x" in L ausfüllen
+COVER_SHEET, COVER_DATE_CELL = "Deckblatt", "F23"   # Prüfdatum
+FLOOR_TARGET_COL = "I"         # Etage  (aus C2)
+AREA_TARGET_COL = "K"          # Wohnbereich (aus B2)
+CHECK_DATE_COL = "L"           # letzte STK  = Prüfdatum
+NEXT_DATE_COL = "N"            # nächste STK = Prüfdatum + 1 Jahr
+DATE_FORMAT = "[$-407]mmm/ yy;@"   # wie in der Vorlage: "Nov. 26"
+MONTHS = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sep.", "Okt.",
+          "Nov.", "Dez."]
 OPTIONS_TOP_ROW = 3        # obere Reihe: die ersten 3, darunter der Rest
 # Stichworte in Q (Mängel) -> Haken wird beim Laden abgewählt (Groß-/Kleinschreibung egal)
 OPTION_KEYWORDS = {
@@ -331,6 +340,32 @@ def parse_date(text):
         return float((datetime.date(y, mo, d) - datetime.date(1899, 12, 30)).days)
     except ValueError:
         return None
+
+
+def excel_date(value):
+    """Excel-Datumszahl (oder Text "17.11.2026") -> datetime.date, sonst None."""
+    if is_number(value) and value > 0:
+        return datetime.date(1899, 12, 30) + datetime.timedelta(days=int(value))
+    if isinstance(value, str):
+        serial = parse_date(value)
+        if serial is not None:
+            return excel_date(serial)
+    return None
+
+
+def add_year(day):
+    try:
+        return day.replace(year=day.year + 1)
+    except ValueError:            # 29. Februar
+        return day.replace(year=day.year + 1, day=28)
+
+
+def to_serial(day):
+    return float((day - datetime.date(1899, 12, 30)).days)
+
+
+def month_text(day):
+    return f"{MONTHS[day.month - 1]} {day.year % 100:02d}"
 
 
 def is_number(value):
@@ -1287,6 +1322,20 @@ class App:
             self.message("Nichts zum Rückgängigmachen.")
             return
         u = self.undo_stack[-1]
+        if u.get("kind") == "bulk":
+            if not messagebox.askyesno(
+                    "Rückgängig", f"„{u['label']}“ rückgängig machen?\n"
+                    f"({len(u['cells'])} Zellen werden auf den alten Stand gesetzt.)",
+                    parent=self.root):
+                return
+            app, wb, ws = self.get_book()
+            for addr, saved in reversed(u["cells"]):
+                restore_cell(ws.Range(addr), saved)
+            self.undo_stack.pop()
+            self.update_undo_button()
+            self.clear_loaded()
+            self.message(f"„{u['label']}“ rückgängig gemacht.")
+            return self.focus_id()
         if not messagebox.askyesno(
                 "Rückgängig",
                 f"Letzte Übernahme für Inv.-Nr. {u['label']} rückgängig machen?\n"
@@ -1401,9 +1450,80 @@ class App:
                 hits.append(name)
         return hits
 
+    @excel_action
     def close_floor(self):
-        """Platzhalter – die Funktion wird später festgelegt."""
-        self.message("„Etage abschließen“ ist noch nicht belegt.")
+        """Alle Zeilen mit "x" in L: Etage, Bereich, Prüfdatum und nächstes Datum eintragen."""
+        if self.changed_cols() and not messagebox.askyesno(
+                "Ungespeicherte Änderungen",
+                f"Die Änderungen bei Inv.-Nr. {self.id_label} wurden noch nicht übernommen.\n\n"
+                "Verwerfen und Etage abschließen?", parent=self.root):
+            return
+        app, wb, ws = self.get_book()
+        self.release_temp_mark()      # vorläufiges "x" zählt nicht mit
+
+        floor = ws.Range(FLOOR_CELL).Value2
+        area = ws.Range(AREA_CELL).Value2
+        if floor in (None, "") or area in (None, ""):
+            raise ExcelError("Bitte zuerst Bereich und Etage eintragen.")
+        check = excel_date(wb.Worksheets(COVER_SHEET).Range(COVER_DATE_CELL).Value2)
+        if check is None:
+            raise ExcelError(f"Kein gültiges Datum in „{COVER_SHEET}“ {COVER_DATE_CELL}.")
+        next_check = add_year(check)
+
+        last = ws.Cells(ws.Rows.Count, 1).End(XL_UP).Row
+        marks = ws.Range(f"{DONE_COL}{FIRST_ROW}:{DONE_COL}{max(last, FIRST_ROW)}").Value2
+        if not isinstance(marks, tuple):
+            marks = ((marks,),)
+        rows = [FIRST_ROW + i for i, (v,) in enumerate(marks)
+                if isinstance(v, str) and v.strip().lower() == DONE_MARK]
+        if not rows:
+            self.clear_loaded()
+            self.message(f"Keine Zeile mit „{DONE_MARK}“ in Spalte {DONE_COL} gefunden.", error=True)
+            return self.focus_id()
+
+        show = lambda v: norm_id(v) or "–"
+        if not messagebox.askyesno(
+                "Etage abschließen",
+                f"{len(rows)} Zeile(n) mit „{DONE_MARK}“ in Spalte {DONE_COL}.\n\n"
+                f"{FLOOR_TARGET_COL} (Etage) = {show(floor)}\n"
+                f"{AREA_TARGET_COL} (Wohnbereich) = {show(area)}\n"
+                f"{CHECK_DATE_COL} (letzte STK) = {month_text(check)}\n"
+                f"{NEXT_DATE_COL} (nächste STK) = {month_text(next_check)}\n\n"
+                "Jetzt eintragen?", parent=self.root):
+            return
+
+        undo = {"kind": "bulk", "label": f"Etage abschließen ({len(rows)} Zeilen)", "cells": []}
+        values = [(FLOOR_TARGET_COL, floor, False), (AREA_TARGET_COL, area, False),
+                  (CHECK_DATE_COL, to_serial(check), True),
+                  (NEXT_DATE_COL, to_serial(next_check), True)]
+        try:
+            app.ScreenUpdating = False
+        except pywintypes.com_error:
+            pass
+        try:
+            for row in rows:
+                for col, value, is_date in values:
+                    rng = ws.Range(f"{col}{row}")
+                    saved = snapshot(rng)
+                    undo["cells"].append((f"{col}{row}", saved))
+                    put_value(rng, value, saved[1])
+                    if is_date and "y" not in str(saved[1] or "").lower():
+                        try:                      # Zelle hatte kein Datumsformat
+                            rng.NumberFormat = DATE_FORMAT
+                        except pywintypes.com_error:
+                            pass
+        finally:
+            try:
+                app.ScreenUpdating = True
+            except pywintypes.com_error:
+                pass
+        self.undo_stack.append(undo)
+        del self.undo_stack[:-50]
+        self.update_undo_button()
+        self.clear_loaded()
+        self.message(f"Etage abgeschlossen: {len(rows)} Zeile(n) – Etage {show(floor)}, "
+                     f"Bereich {show(area)}, {month_text(check)} / {month_text(next_check)}.")
+        return self.focus_id()
 
     def reset_options(self, wb):
         """Geänderte Optionen auf die Voreinstellung zurücksetzen (auch in Excel)."""
