@@ -28,7 +28,7 @@ Statuspunkt: **grün** = Q, R, S leer · **gelb** = Mangel (Q) ohne Klasse (R) �
 **rot** = Mangel mit Klasse (R ausgefüllt). Bei gelb/rot werden Q, R und S
 automatisch eingeblendet und beim nächsten Gerät wieder ausgeblendet.
 
-Neues Bett: Sind in der Zeile B–S alle Felder leer, öffnet sich eine Auswahl der Typen aus
+Neues Bett: Ist Feld E (Typ/Modell) leer, öffnet sich eine Auswahl der Typen aus
 „PRO Pflegebett“ (P7 abwärts, Hersteller aus O). Nach „OK“ werden C = Pflegebett,
 D = Hersteller, E = Typ, H = CE und O = Heim eingetragen – gespeichert wird erst mit *Übernehmen*.
 

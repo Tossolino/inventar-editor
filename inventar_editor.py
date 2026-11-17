@@ -54,6 +54,7 @@ DONE_MARK = "x"
 BED_TYPE_COL = "P"
 BED_MAKER_COL = "O"
 BED_LIST_FIRST_ROW = 7
+TYPE_COL = "E"             # ist E leer, erscheint die Typauswahl
 NEW_BED_VALUES = {"C": "Pflegebett", "H": "CE", "O": "Heim"}   # D und E aus der Auswahl
 
 # Optionen auf "PRO Pflegebett": (Name, Zelle, voreingestellt, Wert wenn aus, rot wenn aus)
@@ -688,7 +689,7 @@ class TypeDialog:
 
         body = tk.Frame(top, padx=12, pady=10)
         body.pack(fill="both", expand=True)
-        tk.Label(body, text=f"Die Zeile für Inv.-Nr. {id_label} ist leer.\n"
+        tk.Label(body, text=f"Für Inv.-Nr. {id_label} ist noch kein Typ (E) eingetragen.\n"
                             "Bitte den Bett-Typ auswählen:",
                  justify="left", anchor="w").pack(fill="x")
         search_line = tk.Frame(body)
@@ -1272,7 +1273,7 @@ class App:
         self.bed.set(False)
         self.show_row(app, wb, ws, row)
         self.update_header_info(wb, ws)
-        row_empty = all(not data[c][0].strip() for c in all_cols()[1:])   # B–S leer
+        no_type = not data[TYPE_COL][0].strip()        # E (Typ/Modell) leer
 
         if len(rows) > 1:
             others = ", ".join(str(r) for r in rows)
@@ -1281,7 +1282,7 @@ class App:
         else:
             hint = f" – abgewählt: {', '.join(keyword_hits)}" if keyword_hits else ""
             self.message(f"Inv.-Nr. {raw} geladen (Zeile {row}){hint}.")
-        if row_empty:
+        if no_type:
             self.root.after(50, lambda: self.offer_bed_types(wb))
         else:
             self.root.after(30, self.focus_first_field)
@@ -1325,10 +1326,12 @@ class App:
             return self.focus_first_field()
         choice = TypeDialog(self.root, types, self.id_label).result
         if choice is None:
-            self.message(f"Inv.-Nr. {self.id_label}: Zeile ist leer – kein Typ ausgewählt.")
+            self.message(f"Inv.-Nr. {self.id_label}: kein Typ ausgewählt.")
             return self.focus_first_field()
         typ, maker = choice
-        values = dict(NEW_BED_VALUES, D=maker, E=typ)
+        # D und E kommen immer aus der Auswahl; C, H und O nur, wenn sie noch leer sind
+        values = {c: v for c, v in NEW_BED_VALUES.items() if not self.vars[c].get().strip()}
+        values.update(D=maker, E=typ)
         for c in SELECTABLE:
             if c in values:
                 self.vars[c].set(values[c])
