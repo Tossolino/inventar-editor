@@ -50,6 +50,12 @@ FLOOR_CELL = "C2"                  # Etage
 DONE_COL = "L"                     # bekommt beim Übernehmen ein "x"
 DONE_MARK = "x"
 
+# Neues Bett: Typenliste aus "PRO Pflegebett" (Typ in P, Hersteller in O, ab Zeile 7)
+BED_TYPE_COL = "P"
+BED_MAKER_COL = "O"
+BED_LIST_FIRST_ROW = 7
+NEW_BED_VALUES = {"C": "Pflegebett", "H": "CE", "O": "Heim"}   # D und E aus der Auswahl
+
 SELECTABLE = ["B", "C", "D", "E", "F", "G", "H", "J", "O", "P", "Q", "R", "S"]
 AUTO_COLS = ["Q", "R", "S"]        # werden bei gelb/rot automatisch eingeblendet
 
@@ -518,6 +524,100 @@ def foreground_window():
 
 
 # --------------------------------------------------------------------------
+# Auswahl des Bett-Typs
+# --------------------------------------------------------------------------
+class TypeDialog:
+    """Pop-up mit der Typenliste aus "PRO Pflegebett" (mit Suchfeld)."""
+
+    def __init__(self, root, types, id_label):
+        self.types = types
+        self.result = None
+        top = self.top = tk.Toplevel(root)
+        top.title(f"Neues Bett – Inv.-Nr. {id_label}")
+        top.transient(root)
+        top.attributes("-topmost", True)
+        top.resizable(False, True)
+
+        body = tk.Frame(top, padx=12, pady=10)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text=f"Die Zeile für Inv.-Nr. {id_label} ist leer.\n"
+                            "Bitte den Bett-Typ auswählen:",
+                 justify="left", anchor="w").pack(fill="x")
+        search_line = tk.Frame(body)
+        search_line.pack(fill="x", pady=(8, 4))
+        tk.Label(search_line, text="Suchen:").pack(side="left")
+        self.search = tk.StringVar()
+        entry = tk.Entry(search_line, textvariable=self.search)
+        entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.search.trace_add("write", lambda *_: self.refresh())
+
+        table = tk.Frame(body)
+        table.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(table, columns=("typ", "hersteller"), show="headings",
+                                 height=16, selectmode="browse")
+        self.tree.heading("typ", text="Typ")
+        self.tree.heading("hersteller", text="Hersteller")
+        self.tree.column("typ", width=200)
+        self.tree.column("hersteller", width=180)
+        scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", lambda e: self.ok())
+
+        buttons = tk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="Abbrechen", command=self.cancel).pack(side="right")
+        ttk.Button(buttons, text="OK", style="Accent.TButton",
+                   command=self.ok).pack(side="right", padx=(0, 6))
+
+        for w in (top, entry, self.tree):
+            w.bind("<Return>", lambda e: self.ok())
+            w.bind("<KP_Enter>", lambda e: self.ok())
+            w.bind("<Escape>", lambda e: self.cancel())
+        entry.bind("<Down>", lambda e: self.tree.focus_set())
+        top.protocol("WM_DELETE_WINDOW", self.cancel)
+
+        self.refresh()
+        self.place(root)
+        top.grab_set()
+        entry.focus_set()
+        root.wait_window(top)
+
+    def refresh(self):
+        needle = self.search.get().strip().lower()
+        self.tree.delete(*self.tree.get_children())
+        for i, (typ, maker) in enumerate(self.types):
+            if needle in typ.lower() or needle in maker.lower():
+                self.tree.insert("", "end", iid=str(i), values=(typ, maker))
+        children = self.tree.get_children()
+        if children:
+            self.tree.selection_set(children[0])
+            self.tree.focus(children[0])
+
+    def place(self, root):
+        """Über dem Programmfenster, waagerecht mittig."""
+        self.top.update_idletasks()
+        w, h = self.top.winfo_reqwidth(), self.top.winfo_reqheight()
+        x = root.winfo_rootx() + (root.winfo_width() - w) // 2
+        y = max(0, root.winfo_rooty() - h - 40)
+        self.top.geometry(f"+{max(0, x)}+{y}")
+
+    def ok(self):
+        sel = self.tree.selection()
+        if not sel:
+            return "break"
+        self.result = self.types[int(sel[0])]
+        self.top.destroy()
+        return "break"
+
+    def cancel(self):
+        self.result = None
+        self.top.destroy()
+        return "break"
+
+
+# --------------------------------------------------------------------------
 # Programmfenster
 # --------------------------------------------------------------------------
 class App:
@@ -952,9 +1052,11 @@ class App:
         id_value = ws.Cells(row, 1).Value2
         ws.Range(ID_CELL).Value2 = id_value          # gleicher Typ wie in Spalte A
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
-        self.fill(read_row(ws, row))
+        data = read_row(ws, row)
+        self.fill(data)
         self.show_row(app, wb, ws, row)
         self.update_header_info(wb, ws)
+        row_empty = all(not data[c][0].strip() for c in all_cols()[1:])   # B–S leer
 
         if len(rows) > 1:
             others = ", ".join(str(r) for r in rows)
@@ -962,6 +1064,62 @@ class App:
                          f"bearbeitet: Zeile {row}.", error=True)
         else:
             self.message(f"Inv.-Nr. {raw} geladen (Zeile {row}).")
+        if row_empty:
+            self.root.after(50, lambda: self.offer_bed_types(wb))
+        else:
+            self.root.after(30, self.focus_first_field)
+        return "break"
+
+    # ------------------------------------------------------------ Neues Bett
+    def read_bed_types(self, wb):
+        """[(Typ, Hersteller)] aus "PRO Pflegebett" ab Zeile 7."""
+        bed = wb.Worksheets(BED_SHEET)
+        col = col_index(BED_TYPE_COL)
+        last = bed.Cells(bed.Rows.Count, col).End(XL_UP).Row
+        if last < BED_LIST_FIRST_ROW:
+            return []
+        first_col, last_col = sorted((BED_MAKER_COL, BED_TYPE_COL))
+        values = bed.Range(f"{first_col}{BED_LIST_FIRST_ROW}:{last_col}{last}").Value2
+        if not isinstance(values[0], tuple):
+            values = (values,)
+        i_type = col_index(BED_TYPE_COL) - col_index(first_col)
+        i_maker = col_index(BED_MAKER_COL) - col_index(first_col)
+
+        def text(v):
+            if v is None:
+                return ""
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)
+            return str(v).strip()
+
+        result = []
+        for line in values:
+            typ, maker = text(line[i_type]), text(line[i_maker])
+            if typ:
+                result.append((typ, maker))
+        return result
+
+    @excel_action
+    def offer_bed_types(self, wb):
+        types = self.read_bed_types(wb)
+        if not types:
+            self.message(f"Keine Typen in „{BED_SHEET}“ ab {BED_TYPE_COL}{BED_LIST_FIRST_ROW} "
+                         "gefunden.", error=True)
+            return self.focus_first_field()
+        choice = TypeDialog(self.root, types, self.id_label).result
+        if choice is None:
+            self.message(f"Inv.-Nr. {self.id_label}: Zeile ist leer – kein Typ ausgewählt.")
+            return self.focus_first_field()
+        typ, maker = choice
+        values = dict(NEW_BED_VALUES, D=maker, E=typ)
+        for c in SELECTABLE:
+            if c in values:
+                self.vars[c].set(values[c])
+                if not self.show_vars[c].get():
+                    self.show_vars[c].set(True)
+                    self.auto_shown.add(c)
+        self.schedule_layout()
+        self.message(f"Neues Bett: {maker} {typ} eingetragen – mit „Übernehmen“ speichern.")
         self.root.after(30, self.focus_first_field)
         return "break"
 
