@@ -82,6 +82,11 @@ FALLBACK_HEADERS = {
     "R": "Mängelklasse", "S": "Stillgelegt",
 }
 FIELD_TITLE = {"R": "MK"}          # abweichende Überschrift im Eingabefeld
+RAIL_TITLE = {"R": "Mängelklasse"}  # abweichende Bezeichnung in der Auswahlschiene
+CENTERED = {"G", "H", "J", "R", "S"}   # Eingabefelder mit zentriertem Text
+OWNER_COL, REGNR_COL = "O", "P"
+OWNER_WITH_REGNR = "RT Beuthel"     # leeres O -> "RT Beuthel": P (Reg.Nr.) einblenden
+MSG_MIN_WIDTH = 260                 # Mindestplatz für die Meldung neben den Feldern
 FIELD_WIDTH = {
     "B": 11, "C": 14, "D": 20, "E": 16, "F": 18, "G": 6, "H": 6,
     "J": 8, "O": 10, "P": 10, "Q": 36, "R": 5, "S": 8,
@@ -198,18 +203,23 @@ def work_area(root):
 
 
 def flow_place(container, widgets, width, gap_x=6, gap_y=4):
-    """Ordnet Widgets nebeneinander an und bricht um, wenn die Breite nicht reicht."""
+    """Ordnet Widgets nebeneinander an und bricht um, wenn die Breite nicht reicht.
+    Liefert (belegte Breite, Anzahl Zeilen)."""
     for w in container.place_slaves():
         w.place_forget()
-    x = y = line_h = 0
+    x = y = line_h = used = 0
+    lines = 1 if widgets else 0
     for w in widgets:
         ww, wh = w.winfo_reqwidth(), w.winfo_reqheight()
         if x > 0 and x + ww > width:
             x, y, line_h = 0, y + line_h + gap_y, 0
+            lines += 1
         w.place(x=x, y=y)
+        used = max(used, x + ww)
         x += ww + gap_x
         line_h = max(line_h, wh)
     container.configure(height=max(1, y + line_h))
+    return used, lines
 
 
 class ExcelError(Exception):
@@ -403,8 +413,9 @@ class Field:
     """Zweizeiliges Textfeld: einzeiliger Text steht vertikal mittig,
     längerer Text wird automatisch umgebrochen."""
 
-    def __init__(self, parent, var, width, on_return, on_escape):
+    def __init__(self, parent, var, width, on_return, on_escape, justify="left"):
         self.var = var
+        self.justify = justify
         self.font = tkfont.Font(family=FONT, size=10)
         self.text = tk.Text(parent, height=2, width=width, wrap="word", font=self.font,
                             relief="solid", bd=1, padx=4, pady=1, undo=False,
@@ -464,7 +475,7 @@ class Field:
             n = n[0]
         pad = self.line_h // 2 if not n else 0
         self.text.tag_add("v", "1.0", "end")
-        self.text.tag_configure("v", spacing1=pad)
+        self.text.tag_configure("v", spacing1=pad, justify=self.justify)
 
     def set_look(self, readonly, bg):
         self.text.configure(state="disabled" if readonly else "normal", bg=bg,
@@ -811,9 +822,6 @@ class App:
                                      command=self.on_update_button)
         self.update_btn.pack(side="left")
 
-        # Meldungen – rechtsbündig unter "Nach Updates suchen"
-        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
-        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 0), pady=(5, 0))
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
@@ -838,20 +846,25 @@ class App:
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
-        # Zeile 4: Felder, rechts daneben der Status
+        # Zeile 4: Felder, direkt dahinter der Status; rechts die Meldung
         field_row = tk.Frame(outer)
         field_row.pack(fill="x")
-        status_box = tk.Frame(field_row)
-        status_box.pack(side="right", anchor="s", padx=(12, 0), pady=(0, 6))
-        tk.Label(status_box, text="Status", font=(FONT, 10, "bold")).pack(side="left", padx=(0, 6))
-        self.dot = tk.Canvas(status_box, width=22, height=22, highlightthickness=0)
+        self.fields = tk.Frame(field_row)
+        self.fields.pack(side="left")
+        self.msg_label = tk.Label(field_row, text="", anchor="e", justify="right", fg="#444",
+                                  font=(FONT, 18, "bold"), width=1)
+        self.msg_label.pack(side="left", fill="both", expand=True, padx=(16, 0))
+        status_box = tk.Frame(self.fields)          # sieht aus wie ein weiteres Feld
+        tk.Label(status_box, text="Status", fg="#333", font=(FONT, 9, "bold"),
+                 anchor="w").pack(fill="x")
+        status_line = tk.Frame(status_box)
+        status_line.pack(fill="x", pady=(8, 0))
+        self.dot = tk.Canvas(status_line, width=22, height=22, highlightthickness=0)
         self.dot_item = self.dot.create_oval(2, 2, 20, 20, outline="#777")
         self.dot.pack(side="left", padx=(0, 4))
-        self.status_label = tk.Label(status_box, text="–", anchor="w", width=17)
+        self.status_label = tk.Label(status_line, text="–", anchor="w")
         self.status_label.pack(side="left")
         self.status_box = status_box
-        self.fields = tk.Frame(field_row)
-        self.fields.pack(side="left", fill="x", expand=True)
         self.field_frames, self.field_labels, self.entries = {}, {}, {}
         for c in SELECTABLE:
             fr = tk.Frame(self.fields)
@@ -860,7 +873,8 @@ class App:
             tk.Label(title, text=c, fg="#333", font=(FONT, 9, "bold"), padx=0).pack(side="left")
             lb = tk.Label(title, anchor="w", fg="#333", font=(FONT, 9), padx=0)
             lb.pack(side="left")
-            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit, self.focus_id)
+            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit, self.focus_id,
+                          justify="center" if c in CENTERED else "left")
             field.text.pack(fill="x")
             self.field_frames[c], self.field_labels[c], self.entries[c] = fr, lb, field
         self.apply_headers()
@@ -868,7 +882,7 @@ class App:
     def apply_headers(self):
         for c in SELECTABLE:
             name = self.headers.get(c, c)
-            self.check_names[c].configure(text=f" · {name}")
+            self.check_names[c].configure(text=f" · {RAIL_TITLE.get(c, name)}")
             suffix = "  (Formel)" if self.formula[c] else ""
             self.field_labels[c].configure(text=f" · {FIELD_TITLE.get(c, name)}{suffix}")
 
@@ -913,7 +927,15 @@ class App:
         self.root.update_idletasks()
         flow_place(self.rail, self.rail_widgets, width, gap_x=12)
         shown = [self.field_frames[c] for c in SELECTABLE if self.show_vars[c].get()]
-        flow_place(self.fields, shown, width - self.status_box.winfo_reqwidth() - 12)
+        # Der Status soll direkt hinter dem letzten Feld stehen: Lieber wird die
+        # Meldung schmaler, als dass der Status allein in eine neue Zeile rutscht.
+        _, field_lines = flow_place(self.fields, shown, width - MSG_MIN_WIDTH)
+        for avail in (width - MSG_MIN_WIDTH, width - 140):
+            used, lines = flow_place(self.fields, shown + [self.status_box], avail)
+            if lines <= field_lines:
+                break
+        self.fields.configure(width=max(1, used))
+        self.msg_label.configure(wraplength=max(MSG_MIN_WIDTH - 20, width - used - 30))
         if fit:
             self.root.update_idletasks()
             self.fit_height()
@@ -987,6 +1009,12 @@ class App:
         if self.loading:
             return
         self.paint_entry(c)
+        if (c == OWNER_COL and self.row is not None and not self.orig[c].strip()
+                and self.vars[c].get().strip().lower() == OWNER_WITH_REGNR.lower()
+                and not self.show_vars[REGNR_COL].get()):
+            self.show_vars[REGNR_COL].set(True)
+            self.auto_shown.add(REGNR_COL)
+            self.schedule_layout()
         if c in AUTO_COLS and self.row is not None:
             self.set_status(compute_status(*(self.vars[x].get() for x in AUTO_COLS)))
 
