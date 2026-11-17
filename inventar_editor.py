@@ -70,7 +70,7 @@ STATUS = {
     None: ("#b5b5b5", "–"),
     "green": ("#2e9e44", "ohne Mängel"),
     "yellow": ("#f2c200", "Mangel ohne Klasse"),
-    "red": ("#d93025", "Mangel mit Klasse"),
+    "red": ("#d93025", "Mängelklasse"),
 }
 
 COLOR_CHANGED = "#fff1b8"
@@ -401,6 +401,74 @@ class Field:
 
 
 # --------------------------------------------------------------------------
+# Hellblauer Rahmen über der Excel-Zeile
+# --------------------------------------------------------------------------
+class RowMarker:
+    """Rahmenloses, durchklickbares Fenster, das nur einen hellblauen Rahmen zeigt.
+    Es liegt über Excel – an der Tabelle selbst wird nichts verändert."""
+
+    KEY = "#ff00fe"      # wird durchsichtig
+    COLOR = "#4da3ff"
+    THICK = 3
+
+    def __init__(self, root):
+        self.ok = False
+        self.shown = None
+        try:
+            self.win = tk.Toplevel(root)
+            self.win.withdraw()
+            self.win.overrideredirect(True)
+            self.win.configure(bg=self.KEY)
+            self.win.attributes("-transparentcolor", self.KEY)
+            self.win.attributes("-topmost", True)
+            self.canvas = tk.Canvas(self.win, bg=self.KEY, highlightthickness=0, bd=0)
+            self.canvas.pack(fill="both", expand=True)
+            self.ok = True
+            root.after(100, self._click_through)
+        except tk.TclError:
+            pass   # nur unter Windows verfügbar
+
+    def _click_through(self):
+        try:
+            import ctypes
+            self.win.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
+            ex = user32.GetWindowLongW(hwnd, -20)
+            # LAYERED | TRANSPARENT | TOOLWINDOW | NOACTIVATE
+            user32.SetWindowLongW(hwnd, -20, ex | 0x80000 | 0x20 | 0x80 | 0x08000000)
+        except Exception:
+            pass
+
+    def show(self, x, y, w, h):
+        if not self.ok:
+            return
+        t = self.THICK
+        rect = (x - t, y - t, w + 2 * t, h + 2 * t)
+        if rect != self.shown:
+            self.shown = rect
+            self.win.geometry(f"{rect[2]}x{rect[3]}+{rect[0]}+{rect[1]}")
+            self.canvas.delete("all")
+            self.canvas.create_rectangle(t / 2, t / 2, rect[2] - t / 2, rect[3] - t / 2,
+                                         outline=self.COLOR, width=t)
+            self.win.deiconify()
+            self.win.attributes("-topmost", True)
+
+    def hide(self):
+        if self.ok and self.shown is not None:
+            self.shown = None
+            self.win.withdraw()
+
+
+def foreground_window():
+    try:
+        import ctypes
+        return ctypes.windll.user32.GetForegroundWindow()
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------
 # Programmfenster
 # --------------------------------------------------------------------------
 class App:
@@ -434,6 +502,9 @@ class App:
         self.logo_full = tk.PhotoImage(data=LOGO_PNG_B64)
         root.iconphoto(True, self.logo_full.subsample(4))
 
+        self.marker = RowMarker(root)
+        self._ctx = None         # (app, wb, ws) der zuletzt benutzten Liste
+
         self.build_ui()
         for c in SELECTABLE:
             self.vars[c].trace_add("write", lambda *_a, c=c: self.on_value_change(c))
@@ -448,6 +519,7 @@ class App:
         self.update_undo_button()
         self.id_entry.focus_set()
         self.poll()
+        self.track_marker()
         self.check_updates(silent=True)
 
     # ---------------------------------------------------------------- Aufbau
@@ -510,13 +582,21 @@ class App:
         self.dot.pack(side="left")
         self.status_label = tk.Label(line, text="–", width=18, anchor="w")
         self.status_label.pack(side="left", padx=(4, 10))
-        ttk.Button(line, text="Übernehmen", style="Accent.TButton",
+        group = tk.Frame(line, highlightthickness=1, highlightbackground="#9a9a9a",
+                         highlightcolor="#9a9a9a", padx=4, pady=3)
+        group.pack(side="left")
+        ttk.Button(group, text="Übernehmen", style="Accent.TButton",
                    command=self.commit).pack(side="left", padx=2)
-        self.undo_btn = ttk.Button(line, text="Rückgängig", command=self.undo)
+        self.undo_btn = ttk.Button(group, text="Rückgängig", command=self.undo)
         self.undo_btn.pack(side="left", padx=2)
-        ttk.Button(line, text="Speichern", command=self.save_book).pack(side="left", padx=2)
-        ttk.Checkbutton(line, text="Daten Bett", style="Toolbutton", variable=self.bed,
-                        command=self.toggle_bed).pack(side="left", padx=(10, 2))
+        ttk.Button(group, text="Speichern", command=self.save_book).pack(side="left", padx=2)
+
+        self.bed_btn = tk.Button(line, text=BED_SHEET, font=(FONT, 10), relief="raised", bd=1,
+                                 padx=10, pady=3, cursor="hand2", command=self.on_bed_button)
+        self.bed_btn.pack(side="left", padx=(12, 2))
+        self.bed_default = (self.bed_btn.cget("bg"), self.bed_btn.cget("fg"),
+                            self.bed_btn.cget("activebackground"))
+        self.bed.trace_add("write", lambda *_: self.paint_bed_button())
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
@@ -524,12 +604,20 @@ class App:
         self.rail = tk.Frame(outer)
         self.rail.pack(fill="x")
         self.rail_widgets = [tk.Label(self.rail, text="Anzeigen:", fg="#666")]
-        self.check_widgets = {}
+        self.check_names = {}
         for c in SELECTABLE:
-            cb = ttk.Checkbutton(self.rail, variable=self.show_vars[c], style="Bold.TCheckbutton",
+            item = tk.Frame(self.rail)
+            cb = ttk.Checkbutton(item, variable=self.show_vars[c],
                                  command=lambda c=c: self.on_check(c))
-            self.check_widgets[c] = cb
-            self.rail_widgets.append(cb)
+            cb.pack(side="left")
+            letter = tk.Label(item, text=c, font=(FONT, 10, "bold"), padx=0)
+            letter.pack(side="left")
+            name = tk.Label(item, font=(FONT, 10), padx=0)
+            name.pack(side="left")
+            for w in (letter, name):   # Klick auf den Text schaltet den Haken
+                w.bind("<Button-1>", lambda e, cb=cb: cb.invoke())
+            self.check_names[c] = name
+            self.rail_widgets.append(item)
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
@@ -539,8 +627,11 @@ class App:
         self.field_frames, self.field_labels, self.entries = {}, {}, {}
         for c in SELECTABLE:
             fr = tk.Frame(self.fields)
-            lb = tk.Label(fr, anchor="w", fg="#333", font=(FONT, 9, "bold"))
-            lb.pack(fill="x")
+            title = tk.Frame(fr)
+            title.pack(fill="x")
+            tk.Label(title, text=c, fg="#333", font=(FONT, 9, "bold"), padx=0).pack(side="left")
+            lb = tk.Label(title, anchor="w", fg="#333", font=(FONT, 9), padx=0)
+            lb.pack(side="left")
             field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit, self.focus_id)
             field.text.pack(fill="x")
             self.field_frames[c], self.field_labels[c], self.entries[c] = fr, lb, field
@@ -549,9 +640,9 @@ class App:
     def apply_headers(self):
         for c in SELECTABLE:
             name = self.headers.get(c, c)
-            self.check_widgets[c].configure(text=f"{c} · {name}")
+            self.check_names[c].configure(text=f" · {name}")
             suffix = "  (Formel)" if self.formula[c] else ""
-            self.field_labels[c].configure(text=f"{c} · {FIELD_TITLE.get(c, name)}{suffix}")
+            self.field_labels[c].configure(text=f" · {FIELD_TITLE.get(c, name)}{suffix}")
 
     def size_logo(self):
         """Logo so groß wie die beiden Kopfzeilen."""
@@ -650,6 +741,8 @@ class App:
     def set_status(self, status):
         self.status = status
         color, text = STATUS[status]
+        if status == "red":
+            text = f"{text} {self.vars['R'].get().strip()}"
         self.dot.itemconfigure(self.dot_item, fill=color)
         self.status_label.configure(text=text)
         if status in ("yellow", "red"):
@@ -730,6 +823,7 @@ class App:
         _, wb, ws = books[names.index(self.selected_book)]
         if not self.headers_loaded:
             self.load_headers(ws)
+        self._ctx = (app, wb, ws)
         return app, wb, ws
 
     @excel_action
@@ -902,6 +996,20 @@ class App:
         self.message(f"„{wb.Name}“ gespeichert.")
         return "break"
 
+    def on_bed_button(self):
+        self.bed.set(not self.bed.get())
+        self.toggle_bed()
+
+    def paint_bed_button(self):
+        if self.bed.get():
+            self.bed_btn.configure(bg="#2e9e44", fg="white", activebackground="#25803a",
+                                   activeforeground="white", font=(FONT, 10, "bold"),
+                                   relief="sunken")
+        else:
+            bg, fg, abg = self.bed_default
+            self.bed_btn.configure(bg=bg, fg=fg, activebackground=abg, activeforeground=fg,
+                                   font=(FONT, 10), relief="raised")
+
     def toggle_bed(self):
         wanted = self.bed.get()
         try:
@@ -927,6 +1035,55 @@ class App:
     def update_header_info(self, wb, ws):
         self.area_label.configure(text=str(ws.Range(AREA_CELL).Text or "–"))
         self.floor_label.configure(text=str(ws.Range(FLOOR_CELL).Text or "–"))
+
+    def row_rect(self):
+        """Bildschirmposition der Zeile A–S, wenn sie in Excel sichtbar ist."""
+        if self.row is None or self._ctx is None:
+            return None
+        app, wb, ws = self._ctx
+        if app.ActiveWorkbook is None or app.ActiveWorkbook.Name != wb.Name:
+            return None
+        if wb.ActiveSheet.Name != ws.Name:
+            return None
+        win = app.ActiveWindow
+        if win.WindowState == -4140:          # minimiert
+            return None
+        fg = foreground_window()
+        if fg is not None:
+            allowed = {int(self.root.wm_frame(), 16), app.Hwnd}
+            try:
+                allowed.add(win.Hwnd)
+            except Exception:
+                pass
+            if fg not in allowed:
+                return None
+        pane = win.Panes(win.Panes.Count) if win.FreezePanes else win.ActivePane
+        visible = pane.VisibleRange
+        first = visible.Row
+        last = first + visible.Rows.Count - 1
+        if not first <= self.row <= last - 1:   # letzte Zeile ist meist nur angeschnitten
+            return None
+        rng = ws.Range(f"A{self.row}:{LAST_COL}{self.row}")
+        x1 = pane.PointsToScreenPixelsX(rng.Left)
+        x2 = pane.PointsToScreenPixelsX(rng.Left + rng.Width)
+        y1 = pane.PointsToScreenPixelsY(rng.Top)
+        y2 = pane.PointsToScreenPixelsY(rng.Top + rng.Height)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return x1, y1, x2 - x1, y2 - y1
+
+    def track_marker(self):
+        """Rahmen laufend nachführen (Scrollen, Zoomen, Fenster verschieben)."""
+        if self.marker.ok:
+            try:
+                rect = self.row_rect()
+            except Exception:
+                rect = None
+            if rect:
+                self.marker.show(*rect)
+            else:
+                self.marker.hide()
+        self.root.after(250, self.track_marker)
 
     def poll(self):
         """Listenauswahl, Bereich und Etage regelmäßig aktualisieren (nur lesend)."""
