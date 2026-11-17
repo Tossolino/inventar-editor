@@ -715,6 +715,7 @@ class App:
         root.iconphoto(True, self.logo_full.subsample(4))
 
         self.marker = RowMarker(root)
+        self.temp_mark = None    # vorläufiges "x" in L: {book, row, id_norm, saved}
         self._ctx = None         # (app, wb, ws) der zuletzt benutzten Liste
 
         self.build_ui()
@@ -726,6 +727,7 @@ class App:
         self.place_initial()
         root.bind("<Configure>", self.on_configure)
         root.bind_all("<Control-s>", lambda e: self.save_book())
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.set_status(None)
         self.update_undo_button()
@@ -776,11 +778,16 @@ class App:
         info = tk.Frame(rows)
         info.grid(row=0, column=1, sticky="w", padx=(14, 0))
         tk.Label(info, text="Bereich:").pack(side="left")
-        self.area_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=4, anchor="w")
-        self.area_label.pack(side="left", padx=(3, 10))
+        self.area_entry = tk.Entry(info, font=(FONT, 12, "bold"), width=4, justify="center")
+        self.area_entry.pack(side="left", padx=(3, 10))
         tk.Label(info, text="Etage:").pack(side="left")
-        self.floor_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=4, anchor="w")
-        self.floor_label.pack(side="left", padx=(3, 0))
+        self.floor_entry = tk.Entry(info, font=(FONT, 12, "bold"), width=4, justify="center")
+        self.floor_entry.pack(side="left", padx=(3, 0))
+        self.header_cells = {AREA_CELL: self.area_entry, FLOOR_CELL: self.floor_entry}
+        self.header_shown = {AREA_CELL: "", FLOOR_CELL: ""}
+        for cell, entry in self.header_cells.items():
+            for key in ("<Return>", "<KP_Enter>", "<FocusOut>"):
+                entry.bind(key, lambda e, c=cell: self.write_header_cell(c))
         tk.Button(info, text="Etage abschließen", font=(FONT, 9, "bold"), relief="raised", bd=1,
                   padx=8, pady=0, cursor="hand2",
                   command=self.close_floor).pack(side="left", padx=(16, 0))
@@ -859,23 +866,11 @@ class App:
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
-        # Zeile 4: Felder, direkt dahinter der Status; rechts die Meldung
+        # Zeile 4: Felder
         field_row = tk.Frame(outer)
         field_row.pack(fill="x")
         self.fields = tk.Frame(field_row)
         self.fields.pack(side="left", fill="x", expand=True)
-        status_box = tk.Frame(self.fields)          # sieht aus wie ein weiteres Feld
-        tk.Label(status_box, text="Status", fg="#333", font=(FONT, 9, "bold"),
-                 anchor="w").pack(fill="x")
-        status_line = tk.Frame(status_box)
-        status_line.pack(fill="x")
-        # doppelte Größe: Punkt 40 px, Text 20 pt
-        self.dot = tk.Canvas(status_line, width=44, height=44, highlightthickness=0)
-        self.dot_item = self.dot.create_oval(3, 3, 41, 41, outline="#777", width=2)
-        self.dot.pack(side="left", padx=(0, 8))
-        self.status_label = tk.Label(status_line, text="–", anchor="w", font=(FONT, 20, "bold"))
-        self.status_label.pack(side="left")
-        self.status_box = status_box
         self.field_frames, self.field_labels, self.entries = {}, {}, {}
         for c in SELECTABLE:
             fr = tk.Frame(self.fields)
@@ -938,7 +933,7 @@ class App:
         self.root.update_idletasks()
         flow_place(self.rail, self.rail_widgets, width, gap_x=12)
         shown = [self.field_frames[c] for c in SELECTABLE if self.show_vars[c].get()]
-        flow_place(self.fields, shown + [self.status_box], width, gap_x=6)
+        flow_place(self.fields, shown, width, gap_x=6)
         if fit:
             self.root.update_idletasks()
             self.fit_height()
@@ -993,11 +988,6 @@ class App:
 
     def set_status(self, status):
         self.status = status
-        color, text = STATUS[status]
-        if status == "red":
-            text = f"{text} {self.vars['R'].get().strip()}"
-        self.dot.itemconfigure(self.dot_item, fill=color)
-        self.status_label.configure(text=text)
         if status in ("yellow", "red"):
             added = False
             for c in AUTO_COLS:
@@ -1096,6 +1086,7 @@ class App:
                 "Verwerfen und Liste wechseln?", parent=self.root):
             self.book_var.set(self.selected_book)
             return self.focus_id()
+        self.release_temp_mark()
         self.selected_book = name
         self.headers_loaded = False
         self.clear_loaded()
@@ -1151,6 +1142,7 @@ class App:
             return "break"
 
         app, wb, ws = self.get_book()
+        self.release_temp_mark()
         self.reset_options(wb)
         self.reset_auto()
         rows = find_rows(ws, norm_id(raw))
@@ -1163,6 +1155,7 @@ class App:
         id_value = ws.Cells(row, 1).Value2
         ws.Range(ID_CELL).Value2 = id_value          # gleicher Typ wie in Spalte A
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
+        self.set_temp_mark(wb, ws, row)
         data = read_row(ws, row)
         self.fill(data)
         keyword_hits = self.options_from_defects(wb, data["Q"][0])
@@ -1271,8 +1264,12 @@ class App:
         undo = {"row": row, "id_norm": self.id_norm, "label": self.id_label, "cells": []}
         for c in changes + [DONE_COL]:
             rng = ws.Range(f"{c}{row}")
-            undo["cells"].append((c, snapshot(rng)))
+            saved = snapshot(rng)
+            if c == DONE_COL and self.temp_mark and self.temp_mark["id_norm"] == self.id_norm:
+                saved = self.temp_mark["saved"]      # Stand vor dem vorläufigen "x"
+            undo["cells"].append((c, saved))
             write_cell(ws, c, row, DONE_MARK if c == DONE_COL else self.vars[c].get())
+        self.temp_mark = None                        # "x" bleibt jetzt stehen
         self.undo_stack.append(undo)
         del self.undo_stack[:-50]
         self.update_undo_button()
@@ -1359,6 +1356,39 @@ class App:
         self.paint_option(name)
         self.message(f"{BED_SHEET}: {name} → {cell} = „{value}“")
 
+    # ------------------------------------------ vorläufiges "x" in Spalte L
+    def set_temp_mark(self, wb, ws, row):
+        """Beim Laden sofort "x" in L setzen; der alte Inhalt wird gemerkt."""
+        rng = ws.Range(f"{DONE_COL}{row}")
+        self.temp_mark = {"book": wb.Name, "row": row, "id_norm": self.id_norm,
+                          "saved": snapshot(rng)}
+        write_cell(ws, DONE_COL, row, DONE_MARK)
+
+    def release_temp_mark(self):
+        """Ohne "Übernehmen": den vorherigen Inhalt von L wiederherstellen."""
+        mark, self.temp_mark = self.temp_mark, None
+        if not mark:
+            return
+        try:
+            app = excel_app()
+            book = next((wb for name, wb, _ in list_books(app) if name == mark["book"]), None)
+            if book is None:
+                return
+            ws = book.Worksheets(REF_SHEET)
+            row = mark["row"]
+            if norm_id(ws.Cells(row, 1).Value2) != mark["id_norm"]:
+                rows = find_rows(ws, mark["id_norm"])
+                if not rows:
+                    return
+                row = rows[0]
+            restore_cell(ws.Range(f"{DONE_COL}{row}"), mark["saved"])
+        except (ExcelError, pywintypes.com_error):
+            pass
+
+    def on_close(self):
+        self.release_temp_mark()
+        self.root.destroy()
+
     def options_from_defects(self, wb, defects):
         """Haken abwählen, deren Stichwort in Q (Mängel / Bemerkung) vorkommt."""
         text = (defects or "").lower()
@@ -1433,8 +1463,29 @@ class App:
         self.focus_id()
 
     def update_header_info(self, wb, ws):
-        self.area_label.configure(text=str(ws.Range(AREA_CELL).Text or "–"))
-        self.floor_label.configure(text=str(ws.Range(FLOOR_CELL).Text or "–"))
+        """Bereich (B2) und Etage (C2) anzeigen – nicht, während dort getippt wird."""
+        focus = self.root.focus_get()
+        for cell, entry in self.header_cells.items():
+            if focus is entry:
+                continue
+            text = str(ws.Range(cell).Text or "")
+            if entry.get() != text:
+                entry.delete(0, "end")
+                entry.insert(0, text)
+            self.header_shown[cell] = text
+
+    @excel_action
+    def write_header_cell(self, cell):
+        entry = self.header_cells[cell]
+        text = entry.get().strip()
+        if text == self.header_shown[cell]:
+            return
+        app, wb, ws = self.get_book()
+        col, row = cell[0], int(cell[1:])
+        write_cell(ws, col, row, text)
+        self.header_shown[cell] = text
+        name = "Bereich" if cell == AREA_CELL else "Etage"
+        self.message(f"{name} → {REF_SHEET}!{cell} = „{text}“")
 
     def row_rect(self):
         """Bildschirmposition der Zeile A–S, wenn sie in Excel sichtbar ist."""
@@ -1618,6 +1669,7 @@ class App:
         self.root.after(200, wait)
 
     def restart_with(self, exe, new):
+        self.release_temp_mark()
         bat = os.path.join(tempfile.gettempdir(), "inventar_editor_update.bat")
         script = (
             "@chcp 65001 >nul\r\n"
