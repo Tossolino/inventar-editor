@@ -68,6 +68,7 @@ BED_OPTIONS = [
     ("Furnierschaden", "G46", True, "Nein", True),
 ]
 OPTION_ON = "Ja"
+OPTIONS_TOP_ROW = 3        # obere Reihe: die ersten 3, darunter der Rest
 
 SELECTABLE = ["B", "C", "D", "E", "F", "G", "H", "J", "O", "P", "Q", "R", "S"]
 AUTO_COLS = ["Q", "R", "S"]        # werden bei gelb/rot automatisch eingeblendet
@@ -789,22 +790,17 @@ class App:
         opts = tk.Frame(rows)
         opts.grid(row=0, column=2, rowspan=2, sticky="w", padx=(16, 0))
         self.option_vars, self.option_widgets = {}, {}
-        per_row = math.ceil(len(BED_OPTIONS) / 2)
         for i, (name, cell, default, _off, _red) in enumerate(BED_OPTIONS):
+            r, col = (0, i) if i < OPTIONS_TOP_ROW else (1, i - OPTIONS_TOP_ROW)
             var = tk.BooleanVar(value=default)
             cb = tk.Checkbutton(opts, text=name, variable=var, anchor="w", padx=2,
                                 command=lambda n=name: self.on_option(n))
-            cb.grid(row=i // per_row, column=i % per_row, sticky="w", padx=(0, 2), pady=1)
+            cb.grid(row=r, column=col, sticky="w", padx=(0, 2), pady=1)
             self.option_vars[name], self.option_widgets[name] = var, cb
         self.option_default_look = (opts.cget("bg"), "black")
         for name, *_ in BED_OPTIONS:
             self.paint_option(name)
 
-        self.msg_label = tk.Label(rows, text="", anchor="w", justify="left", fg="#444",
-                                  width=1, height=2)
-        self.msg_label.grid(row=0, column=3, rowspan=2, sticky="we", padx=(14, 8))
-        self.msg_label.bind("<Configure>",
-                            lambda e: self.msg_label.configure(wraplength=max(60, e.width - 4)))
 
         right = tk.Frame(rows)
         right.grid(row=0, column=4, sticky="e")
@@ -815,15 +811,9 @@ class App:
                                      command=self.on_update_button)
         self.update_btn.pack(side="left")
 
-        # Status – rechtsbündig unter "Nach Updates suchen"
-        status_box = tk.Frame(rows)
-        status_box.grid(row=1, column=4, sticky="e", pady=(5, 0))
-        self.status_label = tk.Label(status_box, text="–", anchor="e")
-        self.status_label.pack(side="right")
-        self.dot = tk.Canvas(status_box, width=22, height=22, highlightthickness=0)
-        self.dot_item = self.dot.create_oval(2, 2, 20, 20, outline="#777")
-        self.dot.pack(side="right", padx=(0, 4))
-        tk.Label(status_box, text="Status", font=(FONT, 10, "bold")).pack(side="right", padx=(0, 6))
+        # Meldungen – rechtsbündig unter "Nach Updates suchen"
+        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
+        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 0), pady=(5, 0))
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
@@ -848,9 +838,20 @@ class App:
 
         ttk.Separator(outer).pack(fill="x", pady=4)
 
-        # Zeile 4: Felder
-        self.fields = tk.Frame(outer)
-        self.fields.pack(fill="x")
+        # Zeile 4: Felder, rechts daneben der Status
+        field_row = tk.Frame(outer)
+        field_row.pack(fill="x")
+        status_box = tk.Frame(field_row)
+        status_box.pack(side="right", anchor="s", padx=(12, 0), pady=(0, 6))
+        tk.Label(status_box, text="Status", font=(FONT, 10, "bold")).pack(side="left", padx=(0, 6))
+        self.dot = tk.Canvas(status_box, width=22, height=22, highlightthickness=0)
+        self.dot_item = self.dot.create_oval(2, 2, 20, 20, outline="#777")
+        self.dot.pack(side="left", padx=(0, 4))
+        self.status_label = tk.Label(status_box, text="–", anchor="w", width=17)
+        self.status_label.pack(side="left")
+        self.status_box = status_box
+        self.fields = tk.Frame(field_row)
+        self.fields.pack(side="left", fill="x", expand=True)
         self.field_frames, self.field_labels, self.entries = {}, {}, {}
         for c in SELECTABLE:
             fr = tk.Frame(self.fields)
@@ -912,7 +913,7 @@ class App:
         self.root.update_idletasks()
         flow_place(self.rail, self.rail_widgets, width, gap_x=12)
         shown = [self.field_frames[c] for c in SELECTABLE if self.show_vars[c].get()]
-        flow_place(self.fields, shown, width)
+        flow_place(self.fields, shown, width - self.status_box.winfo_reqwidth() - 12)
         if fit:
             self.root.update_idletasks()
             self.fit_height()
@@ -1133,6 +1134,11 @@ class App:
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
         data = read_row(ws, row)
         self.fill(data)
+        if app.ActiveWorkbook is None or app.ActiveWorkbook.Name != wb.Name:
+            wb.Activate()
+        if wb.ActiveSheet.Name != ws.Name:       # z.B. von "PRO Pflegebett" zurück
+            ws.Activate()
+        self.bed.set(False)
         self.show_row(app, wb, ws, row)
         self.update_header_info(wb, ws)
         row_empty = all(not data[c][0].strip() for c in all_cols()[1:])   # B–S leer
