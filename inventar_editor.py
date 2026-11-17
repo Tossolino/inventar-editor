@@ -5,6 +5,7 @@ Es verbindet sich per COM mit der laufenden Excel-Instanz; die Excel-Datei
 selbst enthält dafür keinerlei Makros oder Add-ins.
 """
 
+import datetime
 import json
 import math
 import os
@@ -83,7 +84,6 @@ BUSY_CODES = {-2147418111, -2147417846, -2146777998}   # Excel beschäftigt
 NO_EXCEL_CODES = {-2147221021}                          # kein Excel offen
 
 NUMBER_RE = re.compile(r"-?(\d{1,3}(\.\d{3})+|\d+)(,\d+)?")
-DATE_RE = re.compile(r"\d{1,2}\.\d{1,2}\.(\d{2}|\d{4})")
 # Texte, die Excel sonst als Zahl, Datum oder Formel deuten würde
 RISKY_RE = re.compile(r"[=+\-@]|[\d\s.,:/%\-]+$")
 
@@ -283,42 +283,91 @@ def restore_number_format(rng, fmt):
             pass
 
 
-def write_cell(rng, text):
+def parse_date(text):
+    """"17.11.2026" / "17.11.26" -> Excel-Datumszahl, sonst None."""
+    m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})", text.strip())
+    if not m:
+        return None
+    d, mo, y = (int(x) for x in m.groups())
+    if y < 100:
+        y += 2000 if y < 50 else 1900
+    try:
+        return float((datetime.date(y, mo, d) - datetime.date(1899, 12, 30)).days)
+    except ValueError:
+        return None
+
+
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def put_value(rng, value, fmt):
+    """Schreibt Zahl oder Text unverändert und stellt das Zellformat wieder her.
+
+    Excel speichert in einer als „Text“ formatierten Zelle jede Eingabe als Text.
+    Für Zahlen wird das Format deshalb kurz auf „Standard“ gesetzt und danach
+    zurückgestellt – die Zahl bleibt eine Zahl, das Format bleibt wie vorher.
+    """
+    if value is None or value == "":
+        rng.ClearContents()
+    elif is_number(value):
+        if fmt == "@":
+            rng.NumberFormat = "General"
+        rng.Value2 = float(value)
+    elif fmt == "@":
+        rng.Value2 = value
+    elif RISKY_RE.match(value):
+        rng.Value2 = "'" + value                        # als Text erzwingen
+    else:
+        rng.Value2 = value
+    restore_number_format(rng, fmt)
+
+
+def column_holds_numbers(ws, col, row):
+    """Für leere Zellen: Was steht in den Nachbarzeilen – Zahlen oder Text?"""
+    for r in (row - 1, row + 1, row - 2, row + 2):
+        if r < FIRST_ROW:
+            continue
+        v = ws.Range(f"{col}{r}").Value2
+        if v not in (None, ""):
+            return is_number(v)
+    return None
+
+
+def write_cell(ws, col, row, text):
     """Schreibt einen Wert so, dass Datentyp und Zellformat erhalten bleiben.
 
-    - Zahl bleibt Zahl, Text bleibt Text (auch wenn er wie eine Zahl aussieht)
-    - Datum wird als Datum geschrieben
-    - Das Zahlenformat der Zelle wird danach wiederhergestellt
+    - War vorher eine Zahl/ein Datum in der Zelle, wird wieder eine Zahl/ein
+      Datum geschrieben – unabhängig vom Zellformat.
+    - War vorher Text in der Zelle, bleibt es Text.
+    - Ist die Zelle leer, richtet sich der Typ nach den Nachbarzeilen.
+    - Das Zellformat wird danach immer wiederhergestellt.
     """
+    rng = ws.Range(f"{col}{row}")
     old, fmt = snapshot(rng)
     t = text.strip()
     if not t:
-        rng.ClearContents()
-    elif fmt == "@":                                    # Zelle ist als Text formatiert
-        rng.Value2 = text
+        put_value(rng, None, fmt)
+        return
+    if old in (None, ""):
+        want_number = column_holds_numbers(ws, col, row)
+        if want_number is None:
+            want_number = fmt != "@"
     else:
-        number = parse_number(t)
-        was_text = isinstance(old, str)
-        if number is not None and not was_text:
-            rng.Value2 = number
-        elif DATE_RE.fullmatch(t) and not was_text:
-            rng.FormulaLocal = t                        # Excel liest das Datum deutsch
-        elif RISKY_RE.match(t):
-            rng.Value2 = "'" + text                     # als Text erzwingen
-        else:
-            rng.Value2 = text
-    restore_number_format(rng, fmt)
+        want_number = is_number(old)
+    if want_number:
+        number = parse_date(t)
+        if number is None:
+            number = parse_number(t)
+        if number is not None:
+            put_value(rng, number, fmt)
+            return
+    put_value(rng, text, fmt)
 
 
 def restore_cell(rng, saved):
     value, fmt = saved
-    if value is None or value == "":
-        rng.ClearContents()
-    elif isinstance(value, str) and RISKY_RE.match(value):
-        rng.Value2 = "'" + value
-    else:
-        rng.Value2 = value
-    restore_number_format(rng, fmt)
+    put_value(rng, value, fmt)
 
 
 # --------------------------------------------------------------------------
@@ -947,7 +996,7 @@ class App:
         for c in changes + [DONE_COL]:
             rng = ws.Range(f"{c}{row}")
             undo["cells"].append((c, snapshot(rng)))
-            write_cell(rng, DONE_MARK if c == DONE_COL else self.vars[c].get())
+            write_cell(ws, c, row, DONE_MARK if c == DONE_COL else self.vars[c].get())
         self.undo_stack.append(undo)
         del self.undo_stack[:-50]
         self.update_undo_button()
