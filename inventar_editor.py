@@ -1234,8 +1234,19 @@ class App:
         )
         with open(bat, "w", encoding="utf-8", newline="") as f:
             f.write(script)
+        # Saubere Umgebung: Die neue Instanz darf nicht die Einstellungen der alten
+        # (temporärer Entpack-Ordner _MEI…) erben, sonst „Failed to load Python DLL“.
+        env = {k: v for k, v in os.environ.items()
+               if not k.upper().startswith(("_PYI", "_MEIPASS"))
+               and k.upper() not in ("TCL_LIBRARY", "TK_LIBRARY")}
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            env["PATH"] = os.pathsep.join(
+                p for p in env.get("PATH", "").split(os.pathsep)
+                if not os.path.normcase(p).startswith(os.path.normcase(meipass)))
         subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000 | 0x00000200,
-                         close_fds=True)
+                         close_fds=True, env=env, cwd=os.path.dirname(exe))
         self.root.destroy()
         sys.exit(0)
 
