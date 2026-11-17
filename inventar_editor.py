@@ -63,12 +63,19 @@ BED_OPTIONS = [
     ("Bettleuchte", "C2", False, "-", False),
     ("Seitengitter vorh.", "C3", True, "Nein", False),
     ("B-Maß", "C4", True, "Nein", True),
-    ("Handschalter", "K16", True, "Nein", True),
+    ("Bedienteil", "K16", True, "Nein", True),
     ("Netzstecker", "K19", True, "Nein", True),
     ("Furnierschaden", "G46", True, "Nein", True),
 ]
 OPTION_ON = "Ja"
 OPTIONS_TOP_ROW = 3        # obere Reihe: die ersten 3, darunter der Rest
+# Stichworte in Q (Mängel) -> Haken wird beim Laden abgewählt (Groß-/Kleinschreibung egal)
+OPTION_KEYWORDS = {
+    "B-Maß": ["b-maß", "b-mass"],
+    "Bedienteil": ["handschalter", "bedienteil"],
+    "Netzstecker": ["netzstecker"],
+    "Furnierschaden": ["furnier"],          # trifft auch "Furnierschaden"
+}
 
 SELECTABLE = ["B", "C", "D", "E", "F", "G", "H", "J", "O", "P", "Q", "R", "S"]
 AUTO_COLS = ["Q", "R", "S"]        # werden bei gelb/rot automatisch eingeblendet
@@ -774,6 +781,9 @@ class App:
         tk.Label(info, text="Etage:").pack(side="left")
         self.floor_label = tk.Label(info, text="–", font=(FONT, 12, "bold"), width=4, anchor="w")
         self.floor_label.pack(side="left", padx=(3, 0))
+        tk.Button(info, text="Etage abschließen", font=(FONT, 9, "bold"), relief="raised", bd=1,
+                  padx=8, pady=0, cursor="hand2",
+                  command=self.close_floor).pack(side="left", padx=(16, 0))
 
         actions = tk.Frame(rows)
         actions.grid(row=1, column=1, sticky="w", padx=(14, 0), pady=(5, 0))
@@ -814,10 +824,10 @@ class App:
 
         # Meldungen – rechtsbündig unter "Nach Updates suchen"
         self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
-        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 0), pady=(5, 0))
+        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 28), pady=(5, 0))
 
         right = tk.Frame(rows)
-        right.grid(row=0, column=4, sticky="e")
+        right.grid(row=0, column=4, sticky="e", padx=(0, 28))
         ttk.Checkbutton(right, text="Immer im Vordergrund", variable=self.topmost,
                         command=self.toggle_topmost).pack(side="left", padx=(0, 12))
         tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
@@ -1155,6 +1165,7 @@ class App:
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
         data = read_row(ws, row)
         self.fill(data)
+        keyword_hits = self.options_from_defects(wb, data["Q"][0])
         if app.ActiveWorkbook is None or app.ActiveWorkbook.Name != wb.Name:
             wb.Activate()
         if wb.ActiveSheet.Name != ws.Name:       # z.B. von "PRO Pflegebett" zurück
@@ -1169,7 +1180,8 @@ class App:
             self.message(f"Inv.-Nr. {raw} kommt {len(rows)}× vor (Zeilen {others}) – "
                          f"bearbeitet: Zeile {row}.", error=True)
         else:
-            self.message(f"Inv.-Nr. {raw} geladen (Zeile {row}).")
+            hint = f" – abgewählt: {', '.join(keyword_hits)}" if keyword_hits else ""
+            self.message(f"Inv.-Nr. {raw} geladen (Zeile {row}){hint}.")
         if row_empty:
             self.root.after(50, lambda: self.offer_bed_types(wb))
         else:
@@ -1346,6 +1358,22 @@ class App:
             raise
         self.paint_option(name)
         self.message(f"{BED_SHEET}: {name} → {cell} = „{value}“")
+
+    def options_from_defects(self, wb, defects):
+        """Haken abwählen, deren Stichwort in Q (Mängel / Bemerkung) vorkommt."""
+        text = (defects or "").lower()
+        hits = []
+        for name, words in OPTION_KEYWORDS.items():
+            if any(w in text for w in words) and self.option_vars[name].get():
+                self.write_option(wb, name, False)
+                self.option_vars[name].set(False)
+                self.paint_option(name)
+                hits.append(name)
+        return hits
+
+    def close_floor(self):
+        """Platzhalter – die Funktion wird später festgelegt."""
+        self.message("„Etage abschließen“ ist noch nicht belegt.")
 
     def reset_options(self, wb):
         """Geänderte Optionen auf die Voreinstellung zurücksetzen (auch in Excel)."""
