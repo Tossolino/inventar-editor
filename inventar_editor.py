@@ -310,16 +310,22 @@ def is_number(value):
 def put_value(rng, value, fmt):
     """Schreibt Zahl oder Text unverändert und stellt das Zellformat wieder her.
 
-    Excel speichert in einer als „Text“ formatierten Zelle jede Eingabe als Text.
-    Für Zahlen wird das Format deshalb kurz auf „Standard“ gesetzt und danach
-    zurückgestellt – die Zahl bleibt eine Zahl, das Format bleibt wie vorher.
+    Zahlen werden als echte Zahl übergeben – so bleiben sie auch in einer als
+    „Text“ formatierten Zelle eine Zahl, ohne dass das Format angefasst wird.
     """
     if value is None or value == "":
         rng.ClearContents()
     elif is_number(value):
-        if fmt == "@":
-            rng.NumberFormat = "General"
         rng.Value2 = float(value)
+        # Falls Excel die Zahl in einer Text-Zelle doch als Text abgelegt hat:
+        # Format kurz auf "Standard" setzen. Ist das nicht erlaubt (z.B. Blatt-
+        # schutz), bleibt es ohne Fehlermeldung beim geschriebenen Wert.
+        if fmt == "@" and isinstance(rng.Value2, str):
+            try:
+                rng.NumberFormat = "General"
+                rng.Value2 = float(value)
+            except pywintypes.com_error:
+                pass
     elif fmt == "@":
         rng.Value2 = value
     elif RISKY_RE.match(value):
