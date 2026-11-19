@@ -36,3 +36,13 @@ Stand: 17.11.2026 – noch nicht umgesetzt, nur Planung.
   unterscheiden (aktive Kachel = schwarz invertiert/dicker Rahmen statt grün,
   rote Haken = durchgestrichen/„NEIN“ fett), große Schaltflächen, keine Animationen,
   Seite nur bei echten Änderungen neu zeichnen (weniger Geisterbilder).
+
+## Blättertasten (BOOX Go 7 o.ä., Nachtrag 19.11.2026)
+- Die zwei Tasten senden ab Werk meist **Lautstärke** – das sieht eine Webseite nicht.
+- Über BOOX-Menü → App-Optimierung (Würfel) → „Andere“ → **Tasten anpassen**
+  auf Blättern/Scrollen stellen, oder per **Key Mapper** (Android-App) auf
+  Bild↑/Bild↓ bzw. Pfeiltasten umlegen.
+- Die Seite reagiert dann auf PageUp/PageDown/Pfeil/Scroll, z.B.:
+  oben = nächstes Feld bzw. Haken umschalten, unten = „Übernehmen“
+  (Belegung im Einstellungsmenü der Seite wählbar).
+- Erst am echten Gerät testen – Verhalten hängt von Firmware und Browser ab.
