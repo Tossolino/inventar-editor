@@ -26,3 +26,13 @@ Stand: 17.11.2026 – noch nicht umgesetzt, nur Planung.
   da Excel/COM nur aus einem Thread sicher bedient werden kann
 - Zu prüfen: Lässt sich der Hotspot auf dem Notebook ohne bestehende
   Netzverbindung einschalten?
+
+## E-Ink-Geräte (Nachtrag 19.11.2026)
+- **Kindle Paperwhite:** nicht empfohlen. Nur „experimenteller Browser“ (langsam,
+  eingeschränktes JavaScript, träge Bildschirmtastatur).
+- **Android-E-Ink-Tablets** (z.B. Onyx Boox Note Air / Tab / Go, Bigme): geeignet,
+  laufen mit Chrome wie ein normales Android-Tablet.
+- Für E-Ink: optionaler **Schwarz-Weiß-Modus** der Seite – nichts nur über Farbe
+  unterscheiden (aktive Kachel = schwarz invertiert/dicker Rahmen statt grün,
+  rote Haken = durchgestrichen/„NEIN“ fett), große Schaltflächen, keine Animationen,
+  Seite nur bei echten Änderungen neu zeichnen (weniger Geisterbilder).
