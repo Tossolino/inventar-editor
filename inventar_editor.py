@@ -1006,7 +1006,8 @@ class App:
             tk.Label(title, text=c, fg="#333", font=(FONT, 9, "bold"), padx=0).pack(side="left")
             lb = tk.Label(title, anchor="w", fg="#333", font=(FONT, 9), padx=0)
             lb.pack(side="left")
-            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit, self.focus_id,
+            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit,
+                          lambda c=c: self.escape_field(c),
                           justify="center" if c in CENTERED else "left")
             field.text.pack(fill="x")
             self.field_frames[c], self.field_labels[c], self.entries[c] = fr, lb, field
@@ -1387,6 +1388,32 @@ class App:
         self.schedule_layout()
         self.message(f"{info} – mit „Übernehmen“ speichern.")
         self.root.after(30, self.focus_first_field)
+        return "break"
+
+    def escape_field(self, c):
+        """Esc im Feld: Änderung verwerfen, wieder den Eintrag aus der Liste zeigen.
+        Ist das Feld unverändert, springt Esc wie bisher ins Nummernfeld."""
+        if self.row is None or self.formula[c]:
+            return self.focus_id()
+        current = self.orig[c]
+        try:                                   # aktuellen Eintrag aus Excel holen
+            app, wb, ws = self._ctx or self.get_book()
+            text = ws.Range(f"{c}{self.row}").FormulaLocal
+            while isinstance(text, tuple):     # manche Excel-Versionen liefern ((wert,),)
+                text = text[0] if text else None
+            text = "" if text is None else str(text)
+            if not text.startswith("="):
+                current = text
+        except Exception:
+            pass
+        if self.vars[c].get() == current and self.orig[c] == current:
+            return self.focus_id()
+        self.orig[c] = current
+        self.vars[c].set(current)
+        self.paint_entry(c)
+        self.entries[c].focus()
+        name = FIELD_TITLE.get(c, self.headers.get(c, c))
+        self.message(f"{c} · {name}: Änderung verworfen.")
         return "break"
 
     def focus_first_field(self):
