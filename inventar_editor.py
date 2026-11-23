@@ -716,7 +716,7 @@ class Tooltip:
         widget.bind("<Leave>", self.hide)
 
     def show(self, _event=None):
-        if self.tip:
+        if self.tip or not self.text:
             return
         x = self.widget.winfo_rootx() + 10
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
@@ -1231,16 +1231,20 @@ class App:
             self.paint_option(name)
 
 
-        # Meldungen – rechtsbündig unter "Nach Updates suchen"
-        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444")
-        self.msg_label.grid(row=1, column=6, sticky="e", padx=(14, 28), pady=(5, 0))
+        # Meldungen – rechtsbündig unter "Update?"; nie breiter als der Block darüber,
+        # zu lange Texte werden mit "…" gekürzt (voller Text beim Darüberfahren)
+        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
+        self.msg_label.grid(row=1, column=6, sticky="we", padx=(14, 28), pady=(5, 0))
+        self.msg_full = ""
+        self.msg_tip = Tooltip(self.msg_label, "")
+        self.msg_label.bind("<Configure>", lambda e: self.fit_message(), add="+")
 
         right = tk.Frame(rows)
         right.grid(row=0, column=6, sticky="e", padx=(14, 28))
-        ttk.Checkbutton(right, text="Immer Vorne", variable=self.topmost,
+        ttk.Checkbutton(right, text="Vorne", variable=self.topmost,
                         command=self.toggle_topmost).pack(side="left", padx=(0, 12))
         tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
-        self.update_btn = ttk.Button(right, text="Nach Updates suchen",
+        self.update_btn = ttk.Button(right, text="Update?",
                                      command=self.on_update_button)
         self.update_btn.pack(side="left")
 
@@ -1365,9 +1369,23 @@ class App:
 
     # ------------------------------------------------------- Felder & Status
     def message(self, text, error=False):
-        self.msg_label.configure(text=text, fg="#b3261e" if error else "#2b5d2b")
+        self.msg_full = text
+        self.msg_tip.text = text
+        self.msg_label.configure(fg="#b3261e" if error else "#2b5d2b")
+        self.fit_message()
         if error:
             self.root.bell()
+
+    def fit_message(self):
+        """Meldung an die verfügbare Breite anpassen (hinten mit "…" kürzen)."""
+        text = self.msg_full
+        avail = self.msg_label.winfo_width() - 6
+        font = tkfont.Font(font=self.msg_label.cget("font"))
+        if avail > 20 and font.measure(text) > avail:
+            while text and font.measure(text + "…") > avail:
+                text = text[:-1]
+            text = text.rstrip() + "…"
+        self.msg_label.configure(text=text)
 
     def focus_id(self):
         self.id_entry.focus_set()
@@ -2310,7 +2328,7 @@ class App:
 
     # ---------------------------------------------------------------- Updates
     def check_updates(self, silent):
-        self.update_btn.configure(state="disabled", text="Suche Updates …")
+        self.update_btn.configure(state="disabled", text="Suche …")
         self.update_result = None
 
         def worker():
@@ -2341,12 +2359,13 @@ class App:
         self.update_btn.configure(state="normal")
         if kind == "ok" and is_newer(info["tag"], VERSION) and info["url"]:
             self.update_info = info
-            self.update_btn.configure(text=f"Update {info['tag']} verfügbar!", style="Update.TButton")
+            self.update_btn.configure(text="Update!", style="Update.TButton")
+            self.message(f"Update {info['tag']} verfügbar – auf „Update!“ klicken.")
             if not silent:
                 self.ask_update()
             return
         self.update_info = None
-        self.update_btn.configure(text="Nach Updates suchen", style="TButton")
+        self.update_btn.configure(text="Update?", style="TButton")
         if not silent:
             if kind == "error":
                 msgbox.showwarning("Update", f"Update-Prüfung fehlgeschlagen:\n{info}",
@@ -2380,7 +2399,7 @@ class App:
     def download_update(self, info):
         exe = sys.executable
         new = exe + ".new"
-        self.update_btn.configure(state="disabled", text="Lade Update …")
+        self.update_btn.configure(state="disabled", text="Lade …")
         self.download_result = None
 
         def worker():
@@ -2408,7 +2427,7 @@ class App:
                 return
             kind, err = self.download_result
             if kind != "ok":
-                self.update_btn.configure(state="normal", text=f"Update {info['tag']} verfügbar!")
+                self.update_btn.configure(state="normal", text="Update!")
                 msgbox.showerror(
                     "Update", f"Update konnte nicht geladen werden:\n{err}\n\n"
                     "Liegt das Programm in einem Ordner, in den du schreiben darfst "
