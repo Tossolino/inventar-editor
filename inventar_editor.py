@@ -94,6 +94,7 @@ BROKEN_DATE_FORMAT = "[$-407]mmm/ yy;@"
 DATE_SERIAL_RANGE = (36526, 73051)  # 2000 … 2099: Zahlen in diesem Bereich sind Datumswerte
 MONTHS = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sep.", "Okt.",
           "Nov.", "Dez."]
+DEFECTS_CHECK_DELAY_MS = 400  # Pause nach dem Tippen in "Mängel", dann Stichworte prüfen
 DEFECTS_COL = "Q"           # Mängel: Enter prüft die Stichworte (statt zu übernehmen)
 OPTIONS_TOP_ROW = 3        # obere Reihe: die ersten 3, darunter der Rest
 # Stichworte in Q (Mängel) -> Haken wird beim Laden abgewählt (Groß-/Kleinschreibung egal)
@@ -908,6 +909,9 @@ class App:
         self.marker = RowMarker(root)
         self.temp_mark = None    # vorläufiges "x" in L: {book, row, id_norm, saved}
         self.pending = False     # Inventarnummer geladen, aber noch nicht übernommen
+        self.keyword_off = set() # Haken, die wegen eines Stichworts in Q abgewählt wurden
+        self.last_restored = []
+        self._defects_job = None
         self.repaired_books = set()
         self._ctx = None         # (app, wb, ws) der zuletzt benutzten Liste
 
@@ -1243,6 +1247,8 @@ class App:
         self.paint_entry(c)
         self.paint_commit_button()
         self.paint_rail_highlights()
+        if c == DEFECTS_COL and self.row is not None:
+            self.schedule_defects_check()
         if (c == OWNER_COL and self.row is not None and not self.orig[c].strip()
                 and self.vars[c].get().strip().lower() == OWNER_WITH_REGNR.lower()
                 and not self.show_vars[REGNR_COL].get()):
@@ -1692,6 +1698,7 @@ class App:
     @excel_action
     def on_option(self, name):
         on = self.option_vars[name].get()
+        self.keyword_off.discard(name)      # Handeingabe hat Vorrang vor den Stichworten
         try:
             app, wb, ws = self.get_book()
             cell, value = self.write_option(wb, name, on)
@@ -1736,16 +1743,49 @@ class App:
         self.root.destroy()
 
     def options_from_defects(self, wb, defects):
-        """Haken abwählen, deren Stichwort in Q (Mängel / Bemerkung) vorkommt."""
+        """Haken abwählen, deren Stichwort in Q (Mängel) vorkommt.
+        Verschwindet das Stichwort wieder, wird ein so abgewählter Haken wieder gesetzt."""
         text = (defects or "").lower()
-        hits = []
+        hits, restored = [], []
         for name, words in OPTION_KEYWORDS.items():
-            if any(w in text for w in words) and self.option_vars[name].get():
+            found = any(w in text for w in words)
+            if found and self.option_vars[name].get():
                 self.write_option(wb, name, False)
                 self.option_vars[name].set(False)
                 self.paint_option(name)
+                self.keyword_off.add(name)
                 hits.append(name)
+            elif not found and name in self.keyword_off and not self.option_vars[name].get():
+                self.write_option(wb, name, True)
+                self.option_vars[name].set(True)
+                self.paint_option(name)
+                self.keyword_off.discard(name)
+                restored.append(name)
+        self.last_restored = restored
         return hits
+
+    def schedule_defects_check(self):
+        """Beim Tippen in "Mängel": kurz warten, dann die Stichworte prüfen."""
+        if self._defects_job:
+            self.root.after_cancel(self._defects_job)
+        self._defects_job = self.root.after(DEFECTS_CHECK_DELAY_MS, self.live_defects_check)
+
+    def live_defects_check(self):
+        self._defects_job = None
+        if self.row is None or self._ctx is None:
+            return
+        try:
+            app, wb, ws = self._ctx
+            hits = self.options_from_defects(wb, self.vars[DEFECTS_COL].get())
+        except Exception:
+            return          # Excel beschäftigt – bei Enter oder der nächsten Eingabe erneut
+        parts = []
+        if hits:
+            parts.append("abgewählt: " + ", ".join(hits))
+        if self.last_restored:
+            parts.append("wieder gesetzt: " + ", ".join(self.last_restored))
+        if parts:
+            self.message("Mängel – " + "; ".join(parts) + ".")
 
     @excel_action
     def defects_entered(self, event=None):
@@ -1755,9 +1795,14 @@ class App:
         if self.row is None:
             return self.focus_id()
         app, wb, ws = self.get_book()
+        if self._defects_job:
+            self.root.after_cancel(self._defects_job)
+            self._defects_job = None
         hits = self.options_from_defects(wb, self.vars[DEFECTS_COL].get())
         if hits:
             self.message(f"Abgewählt wegen „Mängel“: {', '.join(hits)}.")
+        elif self.last_restored:
+            self.message(f"Wieder gesetzt: {', '.join(self.last_restored)}.")
         else:
             self.message("Mängel geprüft – keine Haken zu ändern.")
         return "break"
@@ -1899,6 +1944,7 @@ class App:
 
     def reset_options(self, wb):
         """Geänderte Optionen auf die Voreinstellung zurücksetzen (auch in Excel)."""
+        self.keyword_off.clear()
         count = 0
         for name, _cell, default, _off, _red in BED_OPTIONS:
             if self.option_vars[name].get() != default:
