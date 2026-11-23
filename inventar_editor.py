@@ -53,6 +53,7 @@ DEVICE_TYPES = ["Pflegebett", "O2-Konzentrator", "Absauggerät", "O2-Armatur",
                 "Aufstehhilfe", "Patientenlifter", "Sitzwaage"]
 HEADER_ROW = 6                     # Überschriften
 FIRST_ROW = 7                      # erste Datenzeile
+MARKER_LAST_COL = "C"              # hellblauer Rahmen nur über A–C
 LAST_COL = "S"                     # Zeile wird von A bis S markiert
 ID_CELL = "A2"                     # hierhin wird die aktuelle Inv.-Nr. geschrieben
 AREA_CELL = "B2"                   # Bereich
@@ -1891,7 +1892,7 @@ class App:
         last = first + visible.Rows.Count - 1
         if not first <= self.row <= last - 1:   # letzte Zeile ist meist nur angeschnitten
             return None
-        rng = ws.Range(f"A{self.row}:{LAST_COL}{self.row}")
+        rng = ws.Range(f"A{self.row}:{MARKER_LAST_COL}{self.row}")
         x1 = pane.PointsToScreenPixelsX(rng.Left)
         x2 = pane.PointsToScreenPixelsX(rng.Left + rng.Width)
         y1 = pane.PointsToScreenPixelsY(rng.Top)
