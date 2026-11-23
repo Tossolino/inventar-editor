@@ -2,4 +2,4 @@
 #   Haupt  – nur bei größeren Updates erhöhen
 #   Zähler – bei jeder Änderung um 1 erhöhen (dreistellig)
 #   Jahr   – zweistellig
-VERSION = "V1.020.26"
+VERSION = "V1.021.26"

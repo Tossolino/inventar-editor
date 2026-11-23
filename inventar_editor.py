@@ -833,6 +833,7 @@ class App:
 
         self.marker = RowMarker(root)
         self.temp_mark = None    # vorläufiges "x" in L: {book, row, id_norm, saved}
+        self.pending = False     # Inventarnummer geladen, aber noch nicht übernommen
         self.repaired_books = set()
         self._ctx = None         # (app, wb, ws) der zuletzt benutzten Liste
 
@@ -1136,8 +1137,10 @@ class App:
                 self.schedule_layout()
 
     def paint_commit_button(self):
-        """Orange, solange es nicht übernommene Änderungen gibt."""
-        if self.changed_cols():
+        """Orange ab dem Laden einer Inventarnummer bis zum Übernehmen
+        (und immer, solange es nicht übernommene Änderungen gibt)."""
+        if (getattr(self, "row", None) is not None and getattr(self, "pending", False)) \
+                or self.changed_cols():
             self.commit_btn.configure(bg="#f28c18", fg="white", activebackground="#d97706",
                                       activeforeground="white")
         else:
@@ -1192,6 +1195,7 @@ class App:
                 if not self.formula[c] and self.vars[c].get() != self.orig[c]]
 
     def clear_loaded(self):
+        self.pending = False
         self.row = None
         self.id_norm = self.id_label = ""
         self.reset_auto()
@@ -1323,6 +1327,7 @@ class App:
         id_value = ws.Cells(row, 1).Value2
         ws.Range(ID_CELL).Value2 = id_value          # gleicher Typ wie in Spalte A
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
+        self.pending = True                  # bis "Übernehmen": Knopf orange
         self.set_temp_mark(wb, ws, row)
         data = read_row(ws, row)
         self.fill(data)
@@ -1446,9 +1451,14 @@ class App:
 
     @excel_action
     def commit(self, event=None):
+        self.do_commit()
+        return self.focus_id()
+
+    def do_commit(self, reset_options=True):
+        """Änderungen und "x" in L schreiben. Liefert True, wenn übernommen wurde."""
         if self.row is None:
             self.message("Bitte zuerst eine Inventarnummer eingeben.", error=True)
-            return self.focus_id()
+            return False
         app, wb, ws = self.get_book()
         row = self.locate(ws)
         current = read_row(ws, row)
@@ -1461,7 +1471,7 @@ class App:
                     "Zwischenzeitlich geändert",
                     f"Diese Felder wurden inzwischen in Excel geändert:\n{names}\n\n"
                     "Trotzdem mit den Werten aus dem Programm überschreiben?", parent=self.root):
-                return "break"
+                return False
 
         undo = {"row": row, "id_norm": self.id_norm, "label": self.id_label, "cells": []}
         for c in changes + [DONE_COL]:
@@ -1475,13 +1485,15 @@ class App:
         self.undo_stack.append(undo)
         del self.undo_stack[:-50]
         self.update_undo_button()
-        self.reset_options(wb)
+        if reset_options:
+            self.reset_options(wb)
 
+        self.pending = False
         self.fill(read_row(ws, row))
         n = len(changes)
         self.message(f"Inv.-Nr. {self.id_label} übernommen: {n} Feld{'er' if n != 1 else ''} "
                      f"geändert, {DONE_COL} = „{DONE_MARK}“.")
-        return self.focus_id()
+        return True
 
     @excel_action
     def undo(self):
@@ -1628,11 +1640,20 @@ class App:
 
     @excel_action
     def _quick_print(self, sheet):
+        """Erst übernehmen, dann drucken, danach die Haken zurücksetzen
+        (sonst stünden auf dem Ausdruck schon die Voreinstellungen)."""
         app, wb, ws = self.get_book()
         if self.row is None:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
+        committed = False
+        if self.pending or self.changed_cols():
+            if not self.do_commit(reset_options=False):
+                return self.focus_id()              # z.B. Rückfrage abgelehnt
+            committed = True
         wb.Worksheets(sheet).PrintOut()
-        self.message(f"„{sheet}“ für Inv.-Nr. {self.id_label} an den Drucker gesendet.")
+        self.reset_options(wb)
+        done = "übernommen und " if committed else ""
+        self.message(f"Inv.-Nr. {self.id_label} {done}„{sheet}“ an den Drucker gesendet.")
         return self.focus_id()
 
     @excel_action
