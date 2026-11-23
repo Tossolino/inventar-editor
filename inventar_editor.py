@@ -434,6 +434,9 @@ def month_text(day):
     return f"{MONTHS[day.month - 1]} {day.year % 100:02d}"
 
 
+PDF_FIRST_FOLDER = "E:\\"     # beim allerersten PDF; danach der zuletzt benutzte Ordner
+
+
 def pdf_name(id_norm):
     """Dateiname aus der Inventarnummer: Zahlen dreistellig (1 -> 001.pdf)."""
     text = (id_norm or "").strip()
@@ -994,16 +997,16 @@ class App:
         # Zeile 3: Auswahlschiene
         self.rail = tk.Frame(outer)
         self.rail.pack(fill="x")
-        self.rail_widgets = [tk.Label(self.rail, text="Anzeigen:", fg="#666")]
+        self.rail_widgets = [tk.Label(self.rail, text="Anzeigen:", fg="#666", font=(FONT, 9))]
         self.check_names = {}
         for c in SELECTABLE:
             item = tk.Frame(self.rail)
             cb = ttk.Checkbutton(item, variable=self.show_vars[c],
                                  command=lambda c=c: self.on_check(c))
             cb.pack(side="left")
-            letter = tk.Label(item, text=c, font=(FONT, 10, "bold"), padx=0)
+            letter = tk.Label(item, text=c, font=(FONT, 9, "bold"), padx=0)
             letter.pack(side="left")
-            name = tk.Label(item, font=(FONT, 10), padx=0)
+            name = tk.Label(item, font=(FONT, 9), padx=0)
             name.pack(side="left")
             for w in (letter, name):   # Klick auf den Text schaltet den Haken
                 w.bind("<Button-1>", lambda e, cb=cb: cb.invoke())
@@ -1078,7 +1081,7 @@ class App:
     def relayout(self, width, fit=True):
         width = max(width, 300)
         self.root.update_idletasks()
-        flow_place(self.rail, self.rail_widgets, width, gap_x=12)
+        flow_place(self.rail, self.rail_widgets, width, gap_x=6)
         shown = [self.field_frames[c] for c in SELECTABLE if self.show_vars[c].get()]
         flow_place(self.fields, shown, width, gap_x=6)
         if fit:
@@ -1655,9 +1658,10 @@ class App:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
         # 1. Dateiname abfragen (vorausgefüllt), erst danach etwas verändern
         name = pdf_name(self.id_norm)
-        folder = self.cfg.get("pdf_folder") or os.path.expanduser("~/Documents")
-        if not os.path.isdir(folder):
-            folder = os.path.expanduser("~")
+        folder = self.cfg.get("pdf_folder") or PDF_FIRST_FOLDER
+        if not os.path.isdir(folder):          # z.B. Laufwerk E: gerade nicht angesteckt
+            folder = PDF_FIRST_FOLDER if os.path.isdir(PDF_FIRST_FOLDER) \
+                else os.path.expanduser("~/Documents")
         path = filedialog.asksaveasfilename(
             parent=self.root, title=f"„{sheet}“ als PDF speichern",
             initialdir=folder, initialfile=name, defaultextension=".pdf",
