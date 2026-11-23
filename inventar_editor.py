@@ -137,7 +137,9 @@ STATUS = {
 COLOR_CHANGED = "#fff1b8"
 EMPTY_HIGHLIGHT_BG = "#ffd98a"     # Anzeigen-Zeile: Feld ist leer
 EMPTY_HIGHLIGHT_FG = "#8a4b00"
-EMPTY_RULE_EXCLUDE = {"Q", "R", "S"}   # bei diesen Feldern ist "leer" der Normalfall
+# Leere Felder werden immer hervorgehoben, aber nur eingeblendet, wenn sie hier NICHT stehen
+EMPTY_RULE_EXCLUDE = {"B", "Q", "R", "S"}
+BOLD_FIELDS = {"J"}                # Zimmer immer fett
 COLOR_FORMULA = "#ececec"
 COLOR_NORMAL = "#ffffff"
 FONT = "Segoe UI"
@@ -540,10 +542,10 @@ class Field:
     """Zweizeiliges Textfeld: einzeiliger Text steht vertikal mittig,
     längerer Text wird automatisch umgebrochen."""
 
-    def __init__(self, parent, var, width, on_return, on_escape, justify="left"):
+    def __init__(self, parent, var, width, on_return, on_escape, justify="left", bold=False):
         self.var = var
         self.justify = justify
-        self.font = tkfont.Font(family=FONT, size=10)
+        self.font = tkfont.Font(family=FONT, size=10, weight="bold" if bold else "normal")
         self.text = tk.Text(parent, height=2, width=width, wrap="word", font=self.font,
                             relief="solid", bd=1, padx=4, pady=1, undo=False,
                             highlightthickness=1, highlightcolor="#3c7fd1",
@@ -1105,7 +1107,8 @@ class App:
             on_enter = self.defects_entered if c == DEFECTS_COL else self.commit
             field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), on_enter,
                           lambda c=c: self.escape_field(c),
-                          justify="center" if c in CENTERED else "left")
+                          justify="center" if c in CENTERED else "left",
+                          bold=c in BOLD_FIELDS)
             field.text.pack(fill="x")
             self.field_frames[c], self.field_labels[c], self.entries[c] = fr, lb, field
         self.apply_headers()
@@ -1279,13 +1282,15 @@ class App:
         self.schedule_layout()
 
     def is_empty_field(self, c):
-        return (getattr(self, "row", None) is not None and c not in EMPTY_RULE_EXCLUDE
+        """Feld ist leer (wird in der Anzeigen-Zeile immer hervorgehoben)."""
+        return (getattr(self, "row", None) is not None
                 and not self.formula[c] and not self.vars[c].get().strip())
 
     def show_empty_fields(self):
         """Leere Felder zusätzlich einblenden (verschwinden bei der nächsten Nummer wieder)."""
         for c in SELECTABLE:
-            if self.is_empty_field(c) and not self.show_vars[c].get():
+            if (self.is_empty_field(c) and c not in EMPTY_RULE_EXCLUDE
+                    and not self.show_vars[c].get()):
                 self.show_vars[c].set(True)
                 self.auto_shown.add(c)
 
