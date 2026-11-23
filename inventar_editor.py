@@ -448,6 +448,17 @@ def month_text(day):
 PDF_FIRST_FOLDER = "E:\\"     # beim allerersten PDF; danach der zuletzt benutzte Ordner
 
 
+# Vor dem PDF prüfen: steht hier eine Zahl (und keine Fehlermeldung wie #NV)?
+PRINT_CHECK_CELLS = {"PRO Pflegebett": "H1"}     # H1:H2 ist verbunden -> Wert in H1
+
+
+def sheet_has_data(wb, sheet):
+    rng = wb.Worksheets(sheet).Range(PRINT_CHECK_CELLS[sheet])
+    value, text = rng.Value2, str(rng.Text or "").strip()
+    # Excel liefert Zahlen als Kommazahl, Fehlerwerte (#NV, #WERT! …) als ganze Fehlernummer
+    return isinstance(value, float) and not text.startswith("#")
+
+
 def pdf_name(id_norm):
     """Dateiname aus der Inventarnummer: Zahlen dreistellig (1 -> 001.pdf)."""
     text = (id_norm or "").strip()
@@ -756,6 +767,97 @@ class Tooltip:
 # --------------------------------------------------------------------------
 # Auswahl des Bett-Typs
 # --------------------------------------------------------------------------
+def dialog_logo(widget):
+    """App-Logo in Dialoggröße (einmal pro Programm erzeugt)."""
+    root = widget.winfo_toplevel()
+    while getattr(root, "master", None) is not None:
+        root = root.master
+    if not hasattr(root, "_dialog_logo"):
+        root._dialog_logo = tk.PhotoImage(data=LOGO_PNG_B64).subsample(4)
+    return root._dialog_logo
+
+
+def place_above(top, parent):
+    """Dialog waagerecht mittig über dem Programmfenster anordnen."""
+    top.update_idletasks()
+    w, h = top.winfo_reqwidth(), top.winfo_reqheight()
+    owner = parent.winfo_toplevel()
+    x = owner.winfo_rootx() + (owner.winfo_width() - w) // 2
+    y = owner.winfo_rooty() - h - 40
+    if y < 0:
+        y = max(0, owner.winfo_rooty() + (owner.winfo_height() - h) // 2)
+    top.geometry(f"+{max(0, x)}+{y}")
+
+
+class MessageDialog:
+    """Meldung / Rückfrage im Stil der App, mit Logo."""
+
+    COLORS = {"info": "#2b5d2b", "warning": "#9a5b00", "error": "#b3261e", "question": "#1f3f6e"}
+
+    def __init__(self, parent, title, message, buttons, kind="info"):
+        self.result = None
+        top = self.top = tk.Toplevel(parent)
+        top.title(title)
+        top.transient(parent.winfo_toplevel())
+        top.attributes("-topmost", True)
+        top.resizable(False, False)
+        body = tk.Frame(top, padx=22, pady=18)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, image=dialog_logo(top)).grid(row=0, column=0, rowspan=2, sticky="n",
+                                                     padx=(0, 18))
+        tk.Label(body, text=title, font=(FONT, 14, "bold"), fg=self.COLORS.get(kind, "black"),
+                 anchor="w", justify="left").grid(row=0, column=1, sticky="w")
+        tk.Label(body, text=message, font=(FONT, 11), anchor="w", justify="left",
+                 wraplength=460).grid(row=1, column=1, sticky="w", pady=(6, 0))
+        line = tk.Frame(body)
+        line.grid(row=2, column=0, columnspan=2, sticky="e", pady=(18, 0))
+        first = None
+        for text, value, primary in reversed(buttons):
+            b = tk.Button(line, text=text, font=(FONT, 11, "bold" if primary else "normal"),
+                          width=9, command=lambda v=value: self.close(v))
+            if primary:
+                b.configure(bg="#2e9e44", fg="white", activebackground="#25803a",
+                            activeforeground="white")
+                first = b
+            b.pack(side="right", padx=(8, 0))
+        default = next((v for _t, v, p in buttons if p), buttons[0][1])
+        cancel = buttons[-1][1]
+        top.bind("<Return>", lambda e: self.close(default))
+        top.bind("<KP_Enter>", lambda e: self.close(default))
+        top.bind("<Escape>", lambda e: self.close(cancel))
+        top.protocol("WM_DELETE_WINDOW", lambda: self.close(cancel))
+        place_above(top, parent)
+        top.grab_set()
+        (first or top).focus_set()
+        top.wait_window(top)
+
+    def close(self, value):
+        self.result = value
+        self.top.destroy()
+
+
+class msgbox:
+    """Ersatz für tkinter.messagebox – gleiche Aufrufe, aber mit App-Logo."""
+
+    @staticmethod
+    def askyesno(title, message, parent=None):
+        return bool(MessageDialog(parent, title, message,
+                                  [("Ja", True, True), ("Nein", False, False)],
+                                  "question").result)
+
+    @staticmethod
+    def showinfo(title, message, parent=None):
+        MessageDialog(parent, title, message, [("OK", None, True)], "info")
+
+    @staticmethod
+    def showwarning(title, message, parent=None):
+        MessageDialog(parent, title, message, [("OK", None, True)], "warning")
+
+    @staticmethod
+    def showerror(title, message, parent=None):
+        MessageDialog(parent, title, message, [("OK", None, True)], "error")
+
+
 class ConfirmDialog:
     """Große Rückfrage mit Ja/Nein (besser lesbar als die Windows-Standardbox)."""
 
@@ -768,8 +870,11 @@ class ConfirmDialog:
         top.resizable(False, False)
         body = tk.Frame(top, padx=28, pady=22)
         body.pack(fill="both", expand=True)
-        tk.Label(body, text=title, font=(FONT, 18, "bold"), anchor="w").pack(fill="x")
-        tk.Label(body, text=heading, font=(FONT, 14), anchor="w").pack(fill="x", pady=(6, 14))
+        head = tk.Frame(body)
+        head.pack(fill="x")
+        tk.Label(head, image=dialog_logo(top)).pack(side="left", padx=(0, 18))
+        tk.Label(head, text=title, font=(FONT, 18, "bold"), anchor="w").pack(side="left")
+        tk.Label(body, text=heading, font=(FONT, 14), anchor="w").pack(fill="x", pady=(10, 14))
         table = tk.Frame(body)
         table.pack(fill="x")
         for i, (label, value) in enumerate(rows):
@@ -822,7 +927,10 @@ class TypeDialog:
 
         body = tk.Frame(top, padx=12, pady=10)
         body.pack(fill="both", expand=True)
-        tk.Label(body, text="Bettentyp", font=(FONT, 14, "bold"), anchor="w").pack(fill="x")
+        head = tk.Frame(body)
+        head.pack(fill="x", pady=(0, 6))
+        tk.Label(head, image=dialog_logo(top)).pack(side="left", padx=(0, 14))
+        tk.Label(head, text="Bettentyp", font=(FONT, 14, "bold"), anchor="w").pack(side="left")
         tk.Label(body, text=f"Für Inv.-Nr. {id_label} ist noch kein Typ (E) eingetragen.\n"
                             "Bitte den Bett-Typ auswählen – oder unten eine andere "
                             "Geräteart wählen:",
@@ -1421,7 +1529,7 @@ class App:
         name = self.book_var.get()
         if name == self.selected_book:
             return self.focus_id()
-        if self.changed_cols() and not messagebox.askyesno(
+        if self.changed_cols() and not msgbox.askyesno(
                 "Ungespeicherte Änderungen",
                 f"Die Änderungen bei Inv.-Nr. {self.id_label} wurden noch nicht übernommen.\n\n"
                 "Verwerfen und Liste wechseln?", parent=self.root):
@@ -1480,7 +1588,7 @@ class App:
         raw = self.id_entry.get().strip()
         if not raw:
             return "break"
-        if self.changed_cols() and not messagebox.askyesno(
+        if self.changed_cols() and not msgbox.askyesno(
                 "Ungespeicherte Änderungen",
                 f"Die Änderungen bei Inv.-Nr. {self.id_label} wurden noch nicht übernommen.\n\n"
                 "Verwerfen und neue Inventarnummer laden?", parent=self.root):
@@ -1640,7 +1748,7 @@ class App:
         conflicts = [c for c in changes if current[c][0] != self.orig[c]]
         if conflicts:
             names = ", ".join(f"{c} ({self.headers.get(c, c)})" for c in conflicts)
-            if not messagebox.askyesno(
+            if not msgbox.askyesno(
                     "Zwischenzeitlich geändert",
                     f"Diese Felder wurden inzwischen in Excel geändert:\n{names}\n\n"
                     "Trotzdem mit den Werten aus dem Programm überschreiben?", parent=self.root):
@@ -1675,7 +1783,7 @@ class App:
             return
         u = self.undo_stack[-1]
         if u.get("kind") == "bulk":
-            if not messagebox.askyesno(
+            if not msgbox.askyesno(
                     "Rückgängig", f"„{u['label']}“ rückgängig machen?\n"
                     f"({len(u['cells'])} Zellen werden auf den alten Stand gesetzt.)",
                     parent=self.root):
@@ -1688,7 +1796,7 @@ class App:
             self.clear_loaded()
             self.message(f"„{u['label']}“ rückgängig gemacht.")
             return self.focus_id()
-        if not messagebox.askyesno(
+        if not msgbox.askyesno(
                 "Rückgängig",
                 f"Letzte Übernahme für Inv.-Nr. {u['label']} rückgängig machen?\n"
                 f"({len(u['cells'])} Zellen werden auf den alten Stand gesetzt.)", parent=self.root):
@@ -1871,6 +1979,13 @@ class App:
         app, wb, ws = self.get_book()
         if self.row is None:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
+        if sheet in PRINT_CHECK_CELLS and not sheet_has_data(wb, sheet):
+            msgbox.showwarning("Keine Daten hinterlegt",
+                               f"In „{sheet}“ {PRINT_CHECK_CELLS[sheet]} steht keine Zahl, "
+                               "sondern eine Fehlermeldung.\nEs wird nichts gespeichert.",
+                               parent=self.root)
+            self.message("Keine Daten hinterlegt – PDF nicht erstellt.", error=True)
+            return self.focus_id()
         # 1. Dateiname abfragen (vorausgefüllt), erst danach etwas verändern
         name = pdf_name(self.id_norm)
         folder = self.cfg.get("pdf_folder") or PDF_FIRST_FOLDER
@@ -1903,7 +2018,7 @@ class App:
     @excel_action
     def close_floor(self):
         """Alle Zeilen mit "x" in L: Etage, Bereich, Prüfdatum und nächstes Datum eintragen."""
-        if self.changed_cols() and not messagebox.askyesno(
+        if self.changed_cols() and not msgbox.askyesno(
                 "Ungespeicherte Änderungen",
                 f"Die Änderungen bei Inv.-Nr. {self.id_label} wurden noch nicht übernommen.\n\n"
                 "Verwerfen und Etage abschließen?", parent=self.root):
@@ -2191,10 +2306,10 @@ class App:
         self.update_btn.configure(text="Nach Updates suchen", style="TButton")
         if not silent:
             if kind == "error":
-                messagebox.showwarning("Update", f"Update-Prüfung fehlgeschlagen:\n{info}",
+                msgbox.showwarning("Update", f"Update-Prüfung fehlgeschlagen:\n{info}",
                                        parent=self.root)
             else:
-                messagebox.showinfo("Update", f"Du hast die neueste Version ({VERSION}).",
+                msgbox.showinfo("Update", f"Du hast die neueste Version ({VERSION}).",
                                     parent=self.root)
 
     def on_update_button(self):
@@ -2212,7 +2327,7 @@ class App:
                   "Die Excel-Liste bleibt geöffnet.")
         if self.changed_cols():
             text += "\n\nAchtung: Nicht übernommene Änderungen im Programm gehen verloren."
-        if not messagebox.askyesno("Update verfügbar", text, parent=self.root):
+        if not msgbox.askyesno("Update verfügbar", text, parent=self.root):
             return
         if not getattr(sys, "frozen", False):
             webbrowser.open(info["page"])
@@ -2251,7 +2366,7 @@ class App:
             kind, err = self.download_result
             if kind != "ok":
                 self.update_btn.configure(state="normal", text=f"Update {info['tag']} verfügbar!")
-                messagebox.showerror(
+                msgbox.showerror(
                     "Update", f"Update konnte nicht geladen werden:\n{err}\n\n"
                     "Liegt das Programm in einem Ordner, in den du schreiben darfst "
                     "(z.B. Dokumente oder Desktop)?", parent=self.root)
