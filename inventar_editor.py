@@ -689,39 +689,6 @@ class RowMarker:
             self.win.withdraw()
 
 
-class RowFill(RowMarker):
-    """Halbdurchsichtige graue Fläche über der Zeile – sieht aus wie eine
-    Excel-Auswahl, auch wenn Excel gerade nicht das aktive Fenster ist."""
-
-    COLOR = "#5b6b80"
-    ALPHA = 0.28
-
-    def __init__(self, root):
-        self.ok = False
-        self.shown = None
-        try:
-            self.win = tk.Toplevel(root)
-            self.win.withdraw()
-            self.win.overrideredirect(True)
-            self.win.configure(bg=self.COLOR)
-            self.win.attributes("-alpha", self.ALPHA)
-            self.win.attributes("-topmost", True)
-            self.ok = sys.platform == "win32"
-            root.after(100, self._click_through)
-        except tk.TclError:
-            pass
-
-    def show(self, x, y, w, h):
-        if not self.ok:
-            return
-        rect = (x, y, w, h)
-        if rect != self.shown:
-            self.shown = rect
-            self.win.geometry(f"{w}x{h}+{x}+{y}")
-            self.win.deiconify()
-            self.win.attributes("-topmost", True)
-
-
 def redraw_window(hwnd):
     """Excel-Fenster neu zeichnen lassen (Auswahl sofort sichtbar machen)."""
     try:
@@ -1114,7 +1081,6 @@ class App:
         self.app_icon = tk.PhotoImage(data=ICON_PNG_B64)
         root.iconphoto(True, self.app_icon.subsample(4), self.app_icon)
 
-        self.row_fill = RowFill(root)     # graue Hinterlegung A–S (wie "angewählt")
         self.marker = RowMarker(root)     # hellblauer Rahmen A–C
         self.temp_mark = None    # vorläufiges "x" in L: {book, row, id_norm, saved}
         self.pending = False     # Inventarnummer geladen, aber noch nicht übernommen
@@ -2294,7 +2260,7 @@ class App:
         if not first <= self.row <= last - 1:   # letzte Zeile ist meist nur angeschnitten
             return None
         rects = []
-        for last_col in (MARKER_LAST_COL, LAST_COL):
+        for last_col in (MARKER_LAST_COL,):
             rng = ws.Range(f"A{self.row}:{last_col}{self.row}")
             x1 = pane.PointsToScreenPixelsX(rng.Left)
             x2 = pane.PointsToScreenPixelsX(rng.Left + rng.Width)
@@ -2307,16 +2273,14 @@ class App:
 
     def track_marker(self):
         """Rahmen laufend nachführen (Scrollen, Zoomen, Fenster verschieben)."""
-        if self.marker.ok or self.row_fill.ok:
+        if self.marker.ok:
             try:
                 rects = self.row_rect()
             except Exception:
                 rects = None
             if rects:
-                self.row_fill.show(*rects[1])
                 self.marker.show(*rects[0])
             else:
-                self.row_fill.hide()
                 self.marker.hide()
         self.root.after(250, self.track_marker)
 
