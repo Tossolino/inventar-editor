@@ -137,6 +137,7 @@ STATUS = {
 COLOR_CHANGED = "#fff1b8"
 EMPTY_HIGHLIGHT_BG = "#ffd98a"     # Anzeigen-Zeile: Feld ist leer
 EMPTY_HIGHLIGHT_FG = "#8a4b00"
+EMPTY_RULE_EXCLUDE = {"Q", "R", "S"}   # bei diesen Feldern ist "leer" der Normalfall
 COLOR_FORMULA = "#ececec"
 COLOR_NORMAL = "#ffffff"
 FONT = "Segoe UI"
@@ -1275,8 +1276,8 @@ class App:
         self.schedule_layout()
 
     def is_empty_field(self, c):
-        return (getattr(self, "row", None) is not None and not self.formula[c]
-                and not self.vars[c].get().strip())
+        return (getattr(self, "row", None) is not None and c not in EMPTY_RULE_EXCLUDE
+                and not self.formula[c] and not self.vars[c].get().strip())
 
     def show_empty_fields(self):
         """Leere Felder zusätzlich einblenden (verschwinden bei der nächsten Nummer wieder)."""
