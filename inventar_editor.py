@@ -110,8 +110,10 @@ FALLBACK_HEADERS = {
     "O": "Eigentümer", "P": "Reg.Nr.", "Q": "Mängel / Bemerkung",
     "R": "Mängelklasse", "S": "Stillgelegt",
 }
-FIELD_TITLE = {"R": "MK"}          # abweichende Überschrift im Eingabefeld
-RAIL_TITLE = {"R": "Mängelklasse"}  # abweichende Bezeichnung in der Auswahlschiene
+# Kurzbezeichnungen (Auswahlschiene und Eingabefelder)
+SHORT_TITLE = {"E": "Typ", "F": "Ser.Nr.", "Q": "Mängel"}
+FIELD_TITLE = dict(SHORT_TITLE, R="MK")            # Überschrift im Eingabefeld
+RAIL_TITLE = dict(SHORT_TITLE, R="Mängelklasse")   # Bezeichnung in der Auswahlschiene
 CENTERED = {"G", "H", "J", "R", "S"}   # Eingabefelder mit zentriertem Text
 OWNER_COL, REGNR_COL = "O", "P"
 OWNER_WITH_REGNR = "RT Beuthel"     # leeres O -> "RT Beuthel": P (Reg.Nr.) einblenden
@@ -155,7 +157,10 @@ def norm_id(value):
         return ""
     if isinstance(value, float) and value.is_integer():
         value = int(value)
-    return str(value).strip().lower()
+    text = str(value).strip().lower()
+    if text.isdigit():                 # "001", "01" und "1" sind dieselbe Nummer
+        text = str(int(text))
+    return text
 
 
 def compute_status(q, r, s):
@@ -911,8 +916,12 @@ class App:
         group = tk.Frame(actions, highlightthickness=1, highlightbackground="#9a9a9a",
                          highlightcolor="#9a9a9a", padx=4, pady=3)
         group.pack(side="left")
-        ttk.Button(group, text="Übernehmen", style="Accent.TButton",
-                   command=self.commit).pack(side="left", padx=2)
+        self.commit_btn = tk.Button(group, text="Übernehmen", font=(FONT, 10, "bold"),
+                                    relief="raised", bd=1, padx=8, pady=1, cursor="hand2",
+                                    command=self.commit)
+        self.commit_btn.pack(side="left", padx=2)
+        self.commit_default = (self.commit_btn.cget("bg"), self.commit_btn.cget("fg"),
+                               self.commit_btn.cget("activebackground"))
         self.undo_btn = ttk.Button(group, text="Rückgängig", command=self.undo)
         self.undo_btn.pack(side="left", padx=2)
         self.save_icon = tk.PhotoImage(data=SAVE_PNG_B64)
@@ -1126,10 +1135,20 @@ class App:
             if added:
                 self.schedule_layout()
 
+    def paint_commit_button(self):
+        """Orange, solange es nicht übernommene Änderungen gibt."""
+        if self.changed_cols():
+            self.commit_btn.configure(bg="#f28c18", fg="white", activebackground="#d97706",
+                                      activeforeground="white")
+        else:
+            bg, fg, abg = self.commit_default
+            self.commit_btn.configure(bg=bg, fg=fg, activebackground=abg, activeforeground=fg)
+
     def on_value_change(self, c):
         if self.loading:
             return
         self.paint_entry(c)
+        self.paint_commit_button()
         if (c == OWNER_COL and self.row is not None and not self.orig[c].strip()
                 and self.vars[c].get().strip().lower() == OWNER_WITH_REGNR.lower()
                 and not self.show_vars[REGNR_COL].get()):
@@ -1163,10 +1182,11 @@ class App:
             self.set_status(compute_status(*(self.vars[x].get() for x in AUTO_COLS)))
         else:
             self.set_status(None)
+        self.paint_commit_button()
         self.schedule_layout()
 
     def changed_cols(self):
-        if self.row is None:
+        if getattr(self, "row", None) is None:
             return []
         return [c for c in SELECTABLE
                 if not self.formula[c] and self.vars[c].get() != self.orig[c]]
