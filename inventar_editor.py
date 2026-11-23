@@ -90,6 +90,7 @@ BROKEN_DATE_FORMAT = "[$-407]mmm/ yy;@"
 DATE_SERIAL_RANGE = (36526, 73051)  # 2000 … 2099: Zahlen in diesem Bereich sind Datumswerte
 MONTHS = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sep.", "Okt.",
           "Nov.", "Dez."]
+DEFECTS_COL = "Q"           # Mängel: Enter prüft die Stichworte (statt zu übernehmen)
 OPTIONS_TOP_ROW = 3        # obere Reihe: die ersten 3, darunter der Rest
 # Stichworte in Q (Mängel) -> Haken wird beim Laden abgewählt (Groß-/Kleinschreibung egal)
 OPTION_KEYWORDS = {
@@ -1028,7 +1029,8 @@ class App:
             tk.Label(title, text=c, fg="#333", font=(FONT, 9, "bold"), padx=0).pack(side="left")
             lb = tk.Label(title, anchor="w", fg="#333", font=(FONT, 9), padx=0)
             lb.pack(side="left")
-            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), self.commit,
+            on_enter = self.defects_entered if c == DEFECTS_COL else self.commit
+            field = Field(fr, self.vars[c], FIELD_WIDTH.get(c, 12), on_enter,
                           lambda c=c: self.escape_field(c),
                           justify="center" if c in CENTERED else "left")
             field.text.pack(fill="x")
@@ -1640,6 +1642,21 @@ class App:
                 self.paint_option(name)
                 hits.append(name)
         return hits
+
+    @excel_action
+    def defects_entered(self, event=None):
+        """Enter im Feld Q (Mängel): Stichworte prüfen und Haken sofort anpassen.
+        Hier wird bewusst NICHT übernommen – "Übernehmen" setzt die Haken zurück,
+        die Haken sollen aber für das PDF stehen bleiben."""
+        if self.row is None:
+            return self.focus_id()
+        app, wb, ws = self.get_book()
+        hits = self.options_from_defects(wb, self.vars[DEFECTS_COL].get())
+        if hits:
+            self.message(f"Abgewählt wegen „Mängel“: {', '.join(hits)}.")
+        else:
+            self.message("Mängel geprüft – keine Haken zu ändern.")
+        return "break"
 
     def quick_print(self, sheet):
         """Blatt als PDF speichern (Druckbereich des Blatts), Dateiname = Inv.-Nr. dreistellig."""
