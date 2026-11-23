@@ -1006,7 +1006,10 @@ class App:
         self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
         self.tiles = {}
         side_tiles = tk.Frame(rows)                 # rechts außen, übereinander
-        side_tiles.grid(row=0, column=5, rowspan=2, sticky="e", padx=(0, 28))
+        side_tiles.grid(row=0, column=4, rowspan=2, sticky="e", padx=(0, 14))
+        # senkrechter Trennstreifen zwischen den Kacheln und dem Block ganz rechts
+        ttk.Separator(rows, orient="vertical").grid(row=0, column=5, rowspan=2, sticky="ns",
+                                                    pady=2)
         for i, (label, sheet) in enumerate(SHEET_TILES):
             if i == 0:
                 tile = tk.Frame(actions, relief="raised", bd=1)
@@ -1048,11 +1051,11 @@ class App:
 
 
         # Meldungen – rechtsbündig unter "Nach Updates suchen"
-        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
-        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 16), pady=(5, 0))
+        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444")
+        self.msg_label.grid(row=1, column=6, sticky="e", padx=(14, 28), pady=(5, 0))
 
         right = tk.Frame(rows)
-        right.grid(row=0, column=4, sticky="e", padx=(0, 16))
+        right.grid(row=0, column=6, sticky="e", padx=(14, 28))
         ttk.Checkbutton(right, text="Immer Vorne", variable=self.topmost,
                         command=self.toggle_topmost).pack(side="left", padx=(0, 12))
         tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
