@@ -86,6 +86,9 @@ FLOOR_TARGET_COL = "I"         # Etage  (aus C2)
 AREA_TARGET_COL = "K"          # Wohnbereich (aus B2)
 CHECK_DATE_COL = "L"           # letzte STK  = Prüfdatum
 NEXT_DATE_COL = "N"            # nächste STK = Prüfdatum + 1 Jahr
+INTERVAL_COL = "M"             # Prüfintervall
+INTERVAL_TEXT = "12\nMonate"   # "12" oben, "Monate" darunter (Zeilenumbruch in der Zelle)
+XL_CENTER = -4108
 # Fehlerhaftes Format aus V1.013.26 (wurde von deutschem Excel als „00/ yy“ gelesen)
 BROKEN_DATE_FORMAT = "[$-407]mmm/ yy;@"
 DATE_SERIAL_RANGE = (36526, 73051)  # 2000 … 2099: Zahlen in diesem Bereich sind Datumswerte
@@ -704,6 +707,58 @@ class Tooltip:
 # --------------------------------------------------------------------------
 # Auswahl des Bett-Typs
 # --------------------------------------------------------------------------
+class ConfirmDialog:
+    """Große Rückfrage mit Ja/Nein (besser lesbar als die Windows-Standardbox)."""
+
+    def __init__(self, root, title, heading, rows, question):
+        self.result = False
+        top = self.top = tk.Toplevel(root)
+        top.title(title)
+        top.transient(root)
+        top.attributes("-topmost", True)
+        top.resizable(False, False)
+        body = tk.Frame(top, padx=28, pady=22)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text=title, font=(FONT, 18, "bold"), anchor="w").pack(fill="x")
+        tk.Label(body, text=heading, font=(FONT, 14), anchor="w").pack(fill="x", pady=(6, 14))
+        table = tk.Frame(body)
+        table.pack(fill="x")
+        for i, (label, value) in enumerate(rows):
+            tk.Label(table, text=label, font=(FONT, 14), anchor="w").grid(
+                row=i, column=0, sticky="w", padx=(0, 24), pady=3)
+            tk.Label(table, text=value, font=(FONT, 14, "bold"), anchor="w").grid(
+                row=i, column=1, sticky="w", pady=3)
+        tk.Label(body, text=question, font=(FONT, 14), anchor="w").pack(fill="x", pady=(16, 0))
+        buttons = tk.Frame(body)
+        buttons.pack(fill="x", pady=(18, 0))
+        tk.Button(buttons, text="Nein", font=(FONT, 14), width=8, command=self.no).pack(
+            side="right")
+        yes = tk.Button(buttons, text="Ja", font=(FONT, 14, "bold"), width=8, bg="#2e9e44",
+                        fg="white", activebackground="#25803a", activeforeground="white",
+                        command=self.yes)
+        yes.pack(side="right", padx=(0, 10))
+        top.bind("<Return>", lambda e: self.yes())
+        top.bind("<KP_Enter>", lambda e: self.yes())
+        top.bind("<Escape>", lambda e: self.no())
+        top.protocol("WM_DELETE_WINDOW", self.no)
+        top.update_idletasks()
+        w, h = top.winfo_reqwidth(), top.winfo_reqheight()
+        x = root.winfo_rootx() + (root.winfo_width() - w) // 2
+        y = max(0, root.winfo_rooty() - h - 40)
+        top.geometry(f"+{max(0, x)}+{y}")
+        top.grab_set()
+        yes.focus_set()
+        root.wait_window(top)
+
+    def yes(self):
+        self.result = True
+        self.top.destroy()
+
+    def no(self):
+        self.result = False
+        self.top.destroy()
+
+
 class TypeDialog:
     """Pop-up mit der Typenliste aus "PRO Pflegebett" (mit Suchfeld)."""
 
@@ -1735,14 +1790,15 @@ class App:
             return self.focus_id()
 
         show = lambda v: norm_id(v) or "–"
-        if not messagebox.askyesno(
-                "Etage abschließen",
-                f"{len(rows)} Zeile(n) mit „{DONE_MARK}“ in Spalte {DONE_COL}.\n\n"
-                f"{FLOOR_TARGET_COL} (Etage) = {show(floor)}\n"
-                f"{AREA_TARGET_COL} (Wohnbereich) = {show(area)}\n"
-                f"{CHECK_DATE_COL} (letzte STK) = {month_text(check)}\n"
-                f"{NEXT_DATE_COL} (nächste STK) = {month_text(next_check)}\n\n"
-                "Jetzt eintragen?", parent=self.root):
+        if not ConfirmDialog(
+                self.root, "Etage abschließen",
+                f"{len(rows)} Zeile(n) mit „{DONE_MARK}“ in Spalte {DONE_COL}",
+                [(f"{FLOOR_TARGET_COL} · Etage", show(floor)),
+                 (f"{AREA_TARGET_COL} · Wohnbereich", show(area)),
+                 (f"{CHECK_DATE_COL} · letzte STK", month_text(check)),
+                 (f"{INTERVAL_COL} · Prüfintervall", INTERVAL_TEXT.replace("\n", " ")),
+                 (f"{NEXT_DATE_COL} · nächste STK", month_text(next_check))],
+                "Jetzt eintragen?").result:
             return
 
         # Datumsformat nicht selbst vorgeben (Excel deutet Formatcodes je nach Sprache
@@ -1753,6 +1809,7 @@ class App:
         undo = {"kind": "bulk", "label": f"Etage abschließen ({len(rows)} Zeilen)", "cells": []}
         values = [(FLOOR_TARGET_COL, floor, False), (AREA_TARGET_COL, area, False),
                   (CHECK_DATE_COL, to_serial(check), True),
+                  (INTERVAL_COL, INTERVAL_TEXT, False),
                   (NEXT_DATE_COL, to_serial(next_check), True)]
         try:
             app.ScreenUpdating = False
@@ -1768,6 +1825,13 @@ class App:
                     if is_date and date_fmt[col] and rng.NumberFormat != date_fmt[col]:
                         try:
                             rng.NumberFormat = date_fmt[col]
+                        except pywintypes.com_error:
+                            pass
+                    if col == INTERVAL_COL:       # Umbruch anzeigen, mittig ausrichten
+                        try:
+                            rng.WrapText = True
+                            rng.HorizontalAlignment = XL_CENTER
+                            rng.VerticalAlignment = XL_CENTER
                         except pywintypes.com_error:
                             pass
             repaired = repair_date_formats(ws, last, date_fmt, undo)
