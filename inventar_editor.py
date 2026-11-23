@@ -135,6 +135,8 @@ STATUS = {
 }
 
 COLOR_CHANGED = "#fff1b8"
+EMPTY_HIGHLIGHT_BG = "#ffd98a"     # Anzeigen-Zeile: Feld ist leer
+EMPTY_HIGHLIGHT_FG = "#8a4b00"
 COLOR_FORMULA = "#ececec"
 COLOR_NORMAL = "#ffffff"
 FONT = "Segoe UI"
@@ -950,7 +952,7 @@ class App:
         rows.columnconfigure(3, weight=1)
 
         self.book_combo = ttk.Combobox(rows, textvariable=self.book_var, state="readonly",
-                                       width=26, font=(FONT, 11, "bold"))
+                                       width=32, font=(FONT, 11))
         self.book_combo.grid(row=0, column=0, sticky="w")
         self.book_combo.bind("<<ComboboxSelected>>", self.on_book_selected)
 
@@ -1002,15 +1004,24 @@ class App:
         # Kacheln: [Drucker | Text] je Prüfprotokoll
         self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
         self.tiles = {}
+        side_tiles = tk.Frame(rows)                 # rechts außen, übereinander
+        side_tiles.grid(row=0, column=5, rowspan=2, sticky="e", padx=(0, 28))
         for i, (label, sheet) in enumerate(SHEET_TILES):
-            tile = tk.Frame(actions, relief="raised", bd=1)
-            tile.pack(side="left", padx=(12 if i == 0 else 6, 0))
-            icon = tk.Label(tile, image=self.print_icon, padx=6, pady=4, cursor="hand2")
+            if i == 0:
+                tile = tk.Frame(actions, relief="raised", bd=1)
+                tile.pack(side="left", padx=(12, 0))
+                pad = 4
+            else:
+                tile = tk.Frame(side_tiles, relief="raised", bd=1)
+                tile.pack(side="top", fill="x", pady=(0 if i == 1 else 3, 0))
+                pad = 1
+            icon = tk.Label(tile, image=self.print_icon, padx=6, pady=pad, cursor="hand2")
             icon.pack(side="left")
             sep = tk.Frame(tile, width=1, bg="#a0a0a0")
-            sep.pack(side="left", fill="y", pady=4)
-            text = tk.Label(tile, text=label, font=(FONT, 10), padx=10, pady=4, cursor="hand2")
-            text.pack(side="left")
+            sep.pack(side="left", fill="y", pady=pad)
+            text = tk.Label(tile, text=label, font=(FONT, 10), padx=10, pady=pad, cursor="hand2",
+                            anchor="w")
+            text.pack(side="left", fill="x", expand=True)
             icon.bind("<Button-1>", lambda e, s=sheet: self.quick_print(s))
             text.bind("<Button-1>", lambda e, s=sheet: self.on_sheet_tile(s))
             Tooltip(icon, f"„{sheet}“ als PDF speichern")
@@ -1037,11 +1048,11 @@ class App:
 
         # Meldungen – rechtsbündig unter "Nach Updates suchen"
         self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
-        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 28), pady=(5, 0))
+        self.msg_label.grid(row=1, column=3, columnspan=2, sticky="we", padx=(14, 16), pady=(5, 0))
 
         right = tk.Frame(rows)
-        right.grid(row=0, column=4, sticky="e", padx=(0, 28))
-        ttk.Checkbutton(right, text="Immer im Vordergrund", variable=self.topmost,
+        right.grid(row=0, column=4, sticky="e", padx=(0, 16))
+        ttk.Checkbutton(right, text="Immer Vorne", variable=self.topmost,
                         command=self.toggle_topmost).pack(side="left", padx=(0, 12))
         tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
         self.update_btn = ttk.Button(right, text="Nach Updates suchen",
@@ -1056,6 +1067,7 @@ class App:
         self.rail.pack(fill="x")
         self.rail_widgets = [tk.Label(self.rail, text="Anzeigen:", fg="#666", font=(FONT, 9))]
         self.check_names = {}
+        self.rail_items = {}
         for c in SELECTABLE:
             item = tk.Frame(self.rail)
             cb = ttk.Checkbutton(item, variable=self.show_vars[c],
@@ -1068,6 +1080,7 @@ class App:
             for w in (letter, name):   # Klick auf den Text schaltet den Haken
                 w.bind("<Button-1>", lambda e, cb=cb: cb.invoke())
             self.check_names[c] = name
+            self.rail_items[c] = (item, letter, name)
             self.rail_widgets.append(item)
 
         ttk.Separator(outer).pack(fill="x", pady=4)
@@ -1222,6 +1235,7 @@ class App:
             return
         self.paint_entry(c)
         self.paint_commit_button()
+        self.paint_rail_highlights()
         if (c == OWNER_COL and self.row is not None and not self.orig[c].strip()
                 and self.vars[c].get().strip().lower() == OWNER_WITH_REGNR.lower()
                 and not self.show_vars[REGNR_COL].get()):
@@ -1253,10 +1267,35 @@ class App:
         self.apply_headers()
         if data:
             self.set_status(compute_status(*(self.vars[x].get() for x in AUTO_COLS)))
+            self.show_empty_fields()
         else:
             self.set_status(None)
+        self.paint_rail_highlights()
         self.paint_commit_button()
         self.schedule_layout()
+
+    def is_empty_field(self, c):
+        return (getattr(self, "row", None) is not None and not self.formula[c]
+                and not self.vars[c].get().strip())
+
+    def show_empty_fields(self):
+        """Leere Felder zusätzlich einblenden (verschwinden bei der nächsten Nummer wieder)."""
+        for c in SELECTABLE:
+            if self.is_empty_field(c) and not self.show_vars[c].get():
+                self.show_vars[c].set(True)
+                self.auto_shown.add(c)
+
+    def paint_rail_highlights(self):
+        """Einträge der Anzeigen-Zeile hervorheben, deren Feld leer ist."""
+        for c, (item, letter, name) in self.rail_items.items():
+            if self.is_empty_field(c):
+                bg, fg = EMPTY_HIGHLIGHT_BG, EMPTY_HIGHLIGHT_FG
+            else:
+                bg, fg = self.rail.cget("bg"), "black"
+            for w in (item, letter, name):
+                w.configure(bg=bg)
+            letter.configure(fg=fg)
+            name.configure(fg=fg)
 
     def changed_cols(self):
         if getattr(self, "row", None) is None:
