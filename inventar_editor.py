@@ -450,6 +450,8 @@ PDF_FIRST_FOLDER = "E:\\"     # beim allerersten PDF; danach der zuletzt benutzt
 
 # Vor dem PDF prüfen: steht hier eine Zahl (und keine Fehlermeldung wie #NV)?
 PRINT_CHECK_CELLS = {"PRO Pflegebett": "H1"}     # H1:H2 ist verbunden -> Wert in H1
+# Fehlen dort Daten, werden diese Werte abgefragt: (Bezeichnung, Zelle)
+MISSING_DATA_FIELDS = {"PRO Pflegebett": [("Iga", "E2"), ("Idiff", "F2"), ("W", "G2")]}
 
 
 def sheet_has_data(wb, sheet):
@@ -856,6 +858,60 @@ class msgbox:
     @staticmethod
     def showerror(title, message, parent=None):
         MessageDialog(parent, title, message, [("OK", None, True)], "error")
+
+
+class DataEntryDialog:
+    """Mehrere Werte abfragen (mit Logo). result: {Bezeichnung: Text} oder None."""
+
+    def __init__(self, parent, title, text, fields, current):
+        self.result = None
+        top = self.top = tk.Toplevel(parent)
+        top.title(title)
+        top.transient(parent)
+        top.attributes("-topmost", True)
+        top.resizable(False, False)
+        body = tk.Frame(top, padx=24, pady=18)
+        body.pack(fill="both", expand=True)
+        head = tk.Frame(body)
+        head.pack(fill="x")
+        tk.Label(head, image=dialog_logo(top)).pack(side="left", padx=(0, 18))
+        tk.Label(head, text=title, font=(FONT, 16, "bold"), fg="#9a5b00").pack(side="left")
+        tk.Label(body, text=text, font=(FONT, 11), anchor="w").pack(fill="x", pady=(12, 8))
+        grid = tk.Frame(body)
+        grid.pack(fill="x")
+        self.entries = {}
+        for i, (label, cell) in enumerate(fields):
+            tk.Label(grid, text=label, font=(FONT, 13, "bold")).grid(row=0, column=i, padx=8)
+            e = tk.Entry(grid, font=(FONT, 14), width=7, justify="center")
+            e.grid(row=1, column=i, padx=8, pady=(2, 0))
+            e.insert(0, current.get(label, ""))
+            tk.Label(grid, text=cell, font=(FONT, 8), fg="#777").grid(row=2, column=i)
+            self.entries[label] = e
+        buttons = tk.Frame(body)
+        buttons.pack(fill="x", pady=(16, 0))
+        tk.Button(buttons, text="Abbrechen", font=(FONT, 11), width=9,
+                  command=self.cancel).pack(side="right")
+        tk.Button(buttons, text="OK", font=(FONT, 11, "bold"), width=9, bg="#2e9e44",
+                  fg="white", activebackground="#25803a", activeforeground="white",
+                  command=self.ok).pack(side="right", padx=(0, 8))
+        top.bind("<Return>", lambda e: self.ok())
+        top.bind("<KP_Enter>", lambda e: self.ok())
+        top.bind("<Escape>", lambda e: self.cancel())
+        top.protocol("WM_DELETE_WINDOW", self.cancel)
+        place_above(top, parent)
+        top.grab_set()
+        first = next(iter(self.entries.values()))
+        first.focus_set()
+        first.select_range(0, "end")
+        top.wait_window(top)
+
+    def ok(self):
+        self.result = {k: e.get().strip() for k, e in self.entries.items()}
+        self.top.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.top.destroy()
 
 
 class ConfirmDialog:
@@ -1980,12 +2036,9 @@ class App:
         if self.row is None:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
         if sheet in PRINT_CHECK_CELLS and not sheet_has_data(wb, sheet):
-            msgbox.showwarning("Keine Daten hinterlegt",
-                               f"In „{sheet}“ {PRINT_CHECK_CELLS[sheet]} steht keine Zahl, "
-                               "sondern eine Fehlermeldung.\nEs wird nichts gespeichert.",
-                               parent=self.root)
-            self.message("Keine Daten hinterlegt – PDF nicht erstellt.", error=True)
-            return self.focus_id()
+            if not self.ask_missing_data(wb, sheet):
+                self.message("Keine Daten vorhanden – PDF nicht erstellt.", error=True)
+                return self.focus_id()
         # 1. Dateiname abfragen (vorausgefüllt), erst danach etwas verändern
         name = pdf_name(self.id_norm)
         folder = self.cfg.get("pdf_folder") or PDF_FIRST_FOLDER
@@ -2014,6 +2067,32 @@ class App:
         done = "übernommen, " if committed else ""
         self.message(f"Inv.-Nr. {self.id_label} {done}gespeichert: {os.path.basename(path)}")
         return self.focus_id()
+
+    def ask_missing_data(self, wb, sheet):
+        """Fehlende Messwerte abfragen und eintragen.
+        Liefert True, wenn danach Daten vorhanden sind (dann geht es mit dem PDF weiter)."""
+        bed = wb.Worksheets(sheet)
+        fields = MISSING_DATA_FIELDS[sheet]
+        current = {}
+        for label, cell in fields:
+            text = bed.Range(cell).Text
+            current[label] = "" if text is None else str(text)
+        values = DataEntryDialog(self.root, "Keine Daten vorhanden",
+                                 f"Bitte die Werte für „{sheet}“ eintragen:",
+                                 fields, current).result
+        if values is None:
+            return False                                   # Abbrechen
+        for label, cell in fields:
+            if values[label] != current[label]:
+                write_cell(bed, cell[0], int(cell[1:]), values[label])
+        written = ", ".join(f"{label} = {values[label] or '–'}" for label, _ in fields)
+        if sheet_has_data(wb, sheet):
+            self.message(f"Eingetragen in „{sheet}“: {written}.")
+            return True
+        msgbox.showwarning("Keine Daten vorhanden",
+                           f"Eingetragen: {written}\n\nIn {PRINT_CHECK_CELLS[sheet]} steht aber "
+                           "noch keine Zahl – es wird kein PDF erstellt.", parent=self.root)
+        return False
 
     @excel_action
     def close_floor(self):
