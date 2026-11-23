@@ -19,7 +19,7 @@ import urllib.request
 import webbrowser
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from logo_data import LOGO_PNG_B64, PRINT_PNG_B64, SAVE_PNG_B64
 from version import VERSION
@@ -42,7 +42,7 @@ ASSET_NAME = "InventarEditor.exe"
 REF_SHEET = "akt. Med.-Produkte"   # Referenzblatt
 BED_SHEET = "PRO Pflegebett"       # Prüfprotokoll Pflegebett (Typenliste, Haken)
 # Kacheln für Prüfprotokolle: (Beschriftung, Tabellenblatt)
-# Druckersymbol links = Schnelldruck, Text = zum Blatt wechseln
+# Druckersymbol links = als PDF speichern, Text = zum Blatt wechseln
 SHEET_TILES = [
     ("Pflegebett", "PRO Pflegebett"),
     ("Med.Produkte", "PRO Med.-Produkte"),
@@ -432,6 +432,15 @@ def to_serial(day):
 
 def month_text(day):
     return f"{MONTHS[day.month - 1]} {day.year % 100:02d}"
+
+
+def pdf_name(id_norm):
+    """Dateiname aus der Inventarnummer: Zahlen dreistellig (1 -> 001.pdf)."""
+    text = (id_norm or "").strip()
+    if text.isdigit():
+        text = f"{int(text):03d}"
+    text = re.sub(r'[\\/:*?"<>|]', "_", text) or "ohne_Nummer"
+    return f"{text}.pdf"
 
 
 def is_number(value):
@@ -944,7 +953,7 @@ class App:
             text.pack(side="left")
             icon.bind("<Button-1>", lambda e, s=sheet: self.quick_print(s))
             text.bind("<Button-1>", lambda e, s=sheet: self.on_sheet_tile(s))
-            Tooltip(icon, f"Schnelldruck „{sheet}“")
+            Tooltip(icon, f"„{sheet}“ als PDF speichern")
             Tooltip(text, f"Zum Blatt „{sheet}“ wechseln")
             self.tiles[sheet] = (tile, icon, text)
         self.tile_default = (actions.cget("bg"), "black")
@@ -1630,8 +1639,7 @@ class App:
         return hits
 
     def quick_print(self, sheet):
-        """Wie "Schnelldruck" in Excel: Blatt mit 1 Kopie auf den Standarddrucker
-        (Druckbereich des Blatts)."""
+        """Blatt als PDF speichern (Druckbereich des Blatts), Dateiname = Inv.-Nr. dreistellig."""
         if self._print_locked:                          # Doppelklick-Schutz
             return
         self._print_locked = True
@@ -1645,15 +1653,32 @@ class App:
         app, wb, ws = self.get_book()
         if self.row is None:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
+        # 1. Dateiname abfragen (vorausgefüllt), erst danach etwas verändern
+        name = pdf_name(self.id_norm)
+        folder = self.cfg.get("pdf_folder") or os.path.expanduser("~/Documents")
+        if not os.path.isdir(folder):
+            folder = os.path.expanduser("~")
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title=f"„{sheet}“ als PDF speichern",
+            initialdir=folder, initialfile=name, defaultextension=".pdf",
+            filetypes=[("PDF-Datei", "*.pdf")])
+        if not path:
+            self.message("PDF nicht gespeichert (abgebrochen).")
+            return self.focus_id()
+        path = os.path.normpath(path)
+        self.cfg["pdf_folder"] = os.path.dirname(path)
+        save_config(self.cfg)
+        # 2. übernehmen, 3. PDF erzeugen, 4. Haken zurücksetzen
+        #    (sonst stünden im PDF schon die Voreinstellungen)
         committed = False
         if self.pending or self.changed_cols():
             if not self.do_commit(reset_options=False):
                 return self.focus_id()              # z.B. Rückfrage abgelehnt
             committed = True
-        wb.Worksheets(sheet).PrintOut()
+        wb.Worksheets(sheet).ExportAsFixedFormat(0, path)      # 0 = PDF
         self.reset_options(wb)
-        done = "übernommen und " if committed else ""
-        self.message(f"Inv.-Nr. {self.id_label} {done}„{sheet}“ an den Drucker gesendet.")
+        done = "übernommen, " if committed else ""
+        self.message(f"Inv.-Nr. {self.id_label} {done}gespeichert: {os.path.basename(path)}")
         return self.focus_id()
 
     @excel_action
