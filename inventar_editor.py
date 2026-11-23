@@ -138,7 +138,7 @@ COLOR_CHANGED = "#fff1b8"
 EMPTY_HIGHLIGHT_BG = "#ffd98a"     # Anzeigen-Zeile: Feld ist leer
 EMPTY_HIGHLIGHT_FG = "#8a4b00"
 # Leere Felder werden immer hervorgehoben, aber nur eingeblendet, wenn sie hier NICHT stehen
-EMPTY_RULE_EXCLUDE = {"B", "Q", "R", "S"}
+EMPTY_RULE_EXCLUDE = {"B", "P", "Q", "R", "S"}
 BOLD_FIELDS = {"J"}                # Zimmer immer fett
 COLOR_FORMULA = "#ececec"
 COLOR_NORMAL = "#ffffff"
