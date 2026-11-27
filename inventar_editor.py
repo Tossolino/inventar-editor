@@ -1131,15 +1131,20 @@ class App:
 
         # Raster: Spalte 0 = Liste / Inv.-Nr. | 1 = Bereich+Etage / Knopfgruppe
         #         2 = Optionen (zweizeilig) | 3 = Meldung | 4 = Update / Status (rechts)
-        rows.columnconfigure(3, weight=1)
+        # Raster: 0 = Liste + Pflegebett / Inv.-Nr. + Knöpfe | 1 = Haken | 2 = Trennstrich
+        #         3 = Bereich, Etage / Etage abschließen | 4 = frei | 5 = Med.Produkte, O2
+        #         6 = Trennstrich | 7 = Vorne, Version, Update / Meldung
+        rows.columnconfigure(4, weight=1)
 
-        self.book_combo = ttk.Combobox(rows, textvariable=self.book_var, state="readonly",
+        top_left = tk.Frame(rows)
+        top_left.grid(row=0, column=0, sticky="w")
+        self.book_combo = ttk.Combobox(top_left, textvariable=self.book_var, state="readonly",
                                        width=32, font=(FONT, 11))
-        self.book_combo.grid(row=0, column=0, sticky="w")
+        self.book_combo.pack(side="left")
         self.book_combo.bind("<<ComboboxSelected>>", self.on_book_selected)
 
         id_box = tk.Frame(rows)
-        id_box.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        id_box.grid(row=1, column=0, sticky="w", pady=(5, 0))
         tk.Label(id_box, text="Inventar-Nr.:", font=(FONT, 11, "bold")).pack(side="left")
         self.id_entry = tk.Entry(id_box, width=4, font=(FONT, 14, "bold"), justify="center")
         self.id_entry.pack(side="left", padx=(6, 0))
@@ -1147,8 +1152,10 @@ class App:
         self.id_entry.bind("<KP_Enter>", self.load_id)
 
         # Bereich / Etage
+        ttk.Separator(rows, orient="vertical").grid(row=0, column=2, rowspan=2, sticky="ns",
+                                                    padx=(10, 14), pady=2)
         info = tk.Frame(rows)
-        info.grid(row=0, column=1, sticky="w", padx=(14, 0))
+        info.grid(row=0, column=3, sticky="w")
         tk.Label(info, text="Bereich:").pack(side="left")
         self.area_entry = tk.Entry(info, font=(FONT, 12, "bold"), width=4, justify="center")
         self.area_entry.pack(side="left", padx=(3, 10))
@@ -1160,9 +1167,9 @@ class App:
         for cell, entry in self.header_cells.items():
             for key in ("<Return>", "<KP_Enter>", "<FocusOut>"):
                 entry.bind(key, lambda e, c=cell: self.write_header_cell(c))
-        tk.Button(info, text="Etage abschließen", font=(FONT, 9, "bold"), relief="raised", bd=1,
-                  padx=8, pady=0, cursor="hand2",
-                  command=self.close_floor).pack(side="left", padx=(16, 0))
+        tk.Button(rows, text="Etage abschließen", font=(FONT, 9, "bold"), relief="raised", bd=1,
+                  padx=8, pady=1, cursor="hand2",
+                  command=self.close_floor).grid(row=1, column=3, sticky="w", pady=(5, 0))
 
         # Knopfgruppe direkt rechts neben dem Nummernfeld (gleiche Zeile wie id_box)
         actions = tk.Frame(id_box)
@@ -1187,15 +1194,15 @@ class App:
         self.print_icon = tk.PhotoImage(data=PRINT_PNG_B64)
         self.tiles = {}
         side_tiles = tk.Frame(rows)                 # rechts außen, übereinander
-        side_tiles.grid(row=0, column=4, rowspan=2, sticky="e", padx=(0, 14))
+        side_tiles.grid(row=0, column=5, rowspan=2, sticky="e", padx=(0, 14))
         # senkrechter Trennstreifen zwischen den Kacheln und dem Block ganz rechts
-        ttk.Separator(rows, orient="vertical").grid(row=0, column=5, rowspan=2, sticky="ns",
+        ttk.Separator(rows, orient="vertical").grid(row=0, column=6, rowspan=2, sticky="ns",
                                                     pady=2)
         for i, (label, sheet) in enumerate(SHEET_TILES):
-            if i == 0:
-                tile = tk.Frame(actions, relief="raised", bd=1)
-                tile.pack(side="left", padx=(12, 0))
-                pad = 4
+            if i == 0:                              # Pflegebett: neben der Listenauswahl
+                tile = tk.Frame(top_left, relief="raised", bd=1)
+                tile.pack(side="left", padx=(10, 0))
+                pad = 1
             else:
                 tile = tk.Frame(side_tiles, relief="raised", bd=1)
                 tile.pack(side="top", fill="x", pady=(0 if i == 1 else 3, 0))
@@ -1217,7 +1224,7 @@ class App:
 
         # Optionen für "PRO Pflegebett" (zweizeilig)
         opts = tk.Frame(rows)
-        opts.grid(row=0, column=2, rowspan=2, sticky="w", padx=(16, 0))
+        opts.grid(row=0, column=1, rowspan=2, sticky="w", padx=(14, 0))
         self.option_vars, self.option_widgets = {}, {}
         for i, (name, cell, default, _off, _red) in enumerate(BED_OPTIONS):
             r, col = (0, i) if i < OPTIONS_TOP_ROW else (1, i - OPTIONS_TOP_ROW)
@@ -1234,13 +1241,13 @@ class App:
         # Meldungen – rechtsbündig unter "Update?"; nie breiter als der Block darüber,
         # zu lange Texte werden mit "…" gekürzt (voller Text beim Darüberfahren)
         self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
-        self.msg_label.grid(row=1, column=6, sticky="we", padx=(14, 28), pady=(5, 0))
+        self.msg_label.grid(row=1, column=7, sticky="we", padx=(14, 28), pady=(5, 0))
         self.msg_full = ""
         self.msg_tip = Tooltip(self.msg_label, "")
         self.msg_label.bind("<Configure>", lambda e: self.fit_message(), add="+")
 
         right = tk.Frame(rows)
-        right.grid(row=0, column=6, sticky="e", padx=(14, 28))
+        right.grid(row=0, column=7, sticky="e", padx=(14, 28))
         ttk.Checkbutton(right, text="Vorne", variable=self.topmost,
                         command=self.toggle_topmost).pack(side="left", padx=(0, 12))
         tk.Label(right, text=VERSION, fg="#666").pack(side="left", padx=(0, 6))
@@ -1649,7 +1656,7 @@ class App:
         ws.Range(ID_CELL).Value2 = id_value          # gleicher Typ wie in Spalte A
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
         self.pending = True                  # bis "Übernehmen": Knopf orange
-        self.set_temp_mark(wb, ws, row)
+        # "x" in L wird erst beim Übernehmen gesetzt (kein vorläufiges "x" mehr)
         data = read_row(ws, row)
         self.fill(data)
         keyword_hits = self.options_from_defects(wb, data["Q"][0])
@@ -2014,16 +2021,27 @@ class App:
 
     @excel_action
     def _quick_print(self, sheet):
-        """Erst übernehmen, dann drucken, danach die Haken zurücksetzen
-        (sonst stünden auf dem Ausdruck schon die Voreinstellungen)."""
+        """Reihenfolge: 1. übernehmen (Werte + "x" in Excel), 2. Excel neu rechnen,
+        3. Daten in H1 prüfen, 4. Dateiname abfragen, 5. PDF, 6. Haken zurücksetzen.
+        So stehen die eben eingegebenen Werte schon im Protokoll und im PDF."""
         app, wb, ws = self.get_book()
         if self.row is None:
             raise ExcelError("Bitte zuerst eine Inventarnummer eingeben.")
+        committed = False
+        if self.pending or self.changed_cols():
+            if not self.do_commit(reset_options=False):
+                return self.focus_id()              # z.B. Rückfrage abgelehnt
+            committed = True
+        try:
+            app.Calculate()                         # falls Excel auf "manuell" rechnet
+        except pywintypes.com_error:
+            pass
         if sheet in PRINT_CHECK_CELLS and not sheet_has_data(wb, sheet):
             if not self.ask_missing_data(wb, sheet):
-                self.message("Keine Daten vorhanden – PDF nicht erstellt.", error=True)
+                self.message(("Übernommen, aber " if committed else "")
+                             + "keine Daten vorhanden – PDF nicht erstellt.", error=True)
                 return self.focus_id()
-        # 1. Dateiname abfragen (vorausgefüllt), erst danach etwas verändern
+        # Dateiname abfragen (vorausgefüllt)
         name = pdf_name(self.id_norm)
         folder = self.cfg.get("pdf_folder") or PDF_FIRST_FOLDER
         if not os.path.isdir(folder):          # z.B. Laufwerk E: gerade nicht angesteckt
@@ -2034,18 +2052,13 @@ class App:
             initialdir=folder, initialfile=name, defaultextension=".pdf",
             filetypes=[("PDF-Datei", "*.pdf")])
         if not path:
-            self.message("PDF nicht gespeichert (abgebrochen).")
+            self.message(("Übernommen, " if committed else "")
+                         + "PDF nicht gespeichert (abgebrochen).")
             return self.focus_id()
         path = os.path.normpath(path)
         self.cfg["pdf_folder"] = os.path.dirname(path)
         save_config(self.cfg)
-        # 2. übernehmen, 3. PDF erzeugen, 4. Haken zurücksetzen
-        #    (sonst stünden im PDF schon die Voreinstellungen)
-        committed = False
-        if self.pending or self.changed_cols():
-            if not self.do_commit(reset_options=False):
-                return self.focus_id()              # z.B. Rückfrage abgelehnt
-            committed = True
+        # PDF erzeugen, danach Haken zurücksetzen (sonst stünden im PDF die Voreinstellungen)
         wb.Worksheets(sheet).ExportAsFixedFormat(0, path)      # 0 = PDF
         self.reset_options(wb)
         done = "übernommen, " if committed else ""
