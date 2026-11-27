@@ -141,6 +141,7 @@ EMPTY_HIGHLIGHT_FG = "#8a4b00"
 # Leere Felder werden immer hervorgehoben, aber nur eingeblendet, wenn sie hier NICHT stehen
 EMPTY_RULE_EXCLUDE = {"B", "P", "Q", "R", "S"}
 BOLD_FIELDS = {"J"}                # Zimmer immer fett
+ROOM_COL = "J"
 COLOR_FORMULA = "#ececec"
 COLOR_NORMAL = "#ffffff"
 FONT = "Segoe UI"
@@ -445,6 +446,7 @@ def month_text(day):
     return f"{MONTHS[day.month - 1]} {day.year % 100:02d}"
 
 
+RECENT_ROOMS = 5               # so viele Zimmer der letzten PDFs werden angezeigt
 PDF_FIRST_FOLDER = "E:\\"     # beim allerersten PDF; danach der zuletzt benutzte Ordner
 
 
@@ -1102,6 +1104,7 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.set_status(None)
+        self.paint_recent()
         self.update_undo_button()
         self.id_entry.focus_set()
         self.poll()
@@ -1202,6 +1205,8 @@ class App:
             if i == 0:                              # Pflegebett: neben der Listenauswahl
                 tile = tk.Frame(top_left, relief="raised", bd=1)
                 tile.pack(side="left", padx=(10, 0))
+                self.print_state = tk.Label(top_left, text="", font=(FONT, 14, "bold"), width=2)
+                self.print_state.pack(side="left", padx=(4, 0))
                 pad = 1
             else:
                 tile = tk.Frame(side_tiles, relief="raised", bd=1)
@@ -1238,13 +1243,17 @@ class App:
             self.paint_option(name)
 
 
-        # Meldungen – rechtsbündig unter "Update?"; nie breiter als der Block darüber,
-        # zu lange Texte werden mit "…" gekürzt (voller Text beim Darüberfahren)
-        self.msg_label = tk.Label(rows, text="", anchor="e", justify="right", fg="#444", width=1)
-        self.msg_label.grid(row=1, column=7, sticky="we", padx=(14, 28), pady=(5, 0))
+        # Zimmer der letzten gespeicherten PDFs: neuestes links (direkt rechts vom
+        # Trennstrich), ältere wandern nach rechts
+        recent = tk.Frame(rows)
+        recent.grid(row=1, column=7, sticky="w", padx=(14, 28), pady=(5, 0))
+        self.recent_labels = []
+        for i in range(RECENT_ROOMS):
+            lb = tk.Label(recent, text="", font=(FONT, 11, "bold" if i == 0 else "normal"),
+                          fg="#1f3f6e" if i == 0 else "#666", width=5, anchor="w")
+            lb.pack(side="left")
+            self.recent_labels.append((lb, Tooltip(lb, "")))
         self.msg_full = ""
-        self.msg_tip = Tooltip(self.msg_label, "")
-        self.msg_label.bind("<Configure>", lambda e: self.fit_message(), add="+")
 
         right = tk.Frame(rows)
         right.grid(row=0, column=7, sticky="e", padx=(14, 28))
@@ -1376,23 +1385,40 @@ class App:
 
     # ------------------------------------------------------- Felder & Status
     def message(self, text, error=False):
+        """Hinweise stehen in der Titelleiste; Fehler erscheinen als Fenster mit Logo."""
         self.msg_full = text
-        self.msg_tip.text = text
-        self.msg_label.configure(fg="#b3261e" if error else "#2b5d2b")
-        self.fit_message()
+        self.root.title(f"Inventar-Editor {VERSION} – {text}" if text
+                        else f"Inventar-Editor {VERSION}")
         if error:
             self.root.bell()
+            msgbox.showwarning("Hinweis", text, parent=self.root)
 
-    def fit_message(self):
-        """Meldung an die verfügbare Breite anpassen (hinten mit "…" kürzen)."""
-        text = self.msg_full
-        avail = self.msg_label.winfo_width() - 6
-        font = tkfont.Font(font=self.msg_label.cget("font"))
-        if avail > 20 and font.measure(text) > avail:
-            while text and font.measure(text + "…") > avail:
-                text = text[:-1]
-            text = text.rstrip() + "…"
-        self.msg_label.configure(text=text)
+    def paint_recent(self):
+        entries = self.cfg.get("recent_rooms", [])[:RECENT_ROOMS]
+        for i, (lb, tip) in enumerate(self.recent_labels):
+            if i < len(entries):
+                e = entries[i]
+                lb.configure(text=e.get("room") or "–")
+                tip.text = f"Zimmer {e.get('room') or '–'} · Inv.-Nr. {e.get('id', '')} · {e.get('file', '')}"
+            else:
+                lb.configure(text="")
+                tip.text = ""
+
+    def add_recent(self, room, inv, file):
+        entries = self.cfg.get("recent_rooms", [])
+        entries.insert(0, {"room": room, "id": inv, "file": file})
+        self.cfg["recent_rooms"] = entries[:RECENT_ROOMS]
+        save_config(self.cfg)
+        self.paint_recent()
+
+    def set_print_state(self, done):
+        """Pflegebett: grüner Haken = PDF gespeichert, rotes Kreuz = noch nicht."""
+        if done is None:
+            self.print_state.configure(text="")
+        elif done:
+            self.print_state.configure(text="✔", fg="#2e9e44")
+        else:
+            self.print_state.configure(text="✘", fg="#d93025")
 
     def focus_id(self):
         self.id_entry.focus_set()
@@ -1519,6 +1545,7 @@ class App:
                 if not self.formula[c] and self.vars[c].get() != self.orig[c]]
 
     def clear_loaded(self):
+        self.set_print_state(None)
         self.pending = False
         self.row = None
         self.id_norm = self.id_label = ""
@@ -1655,6 +1682,7 @@ class App:
         id_value = ws.Cells(row, 1).Value2
         ws.Range(ID_CELL).Value2 = id_value          # gleicher Typ wie in Spalte A
         self.row, self.id_norm, self.id_label = row, norm_id(id_value), raw
+        self.set_print_state(False)
         self.pending = True                  # bis "Übernehmen": Knopf orange
         # "x" in L wird erst beim Übernehmen gesetzt (kein vorläufiges "x" mehr)
         data = read_row(ws, row)
@@ -2039,7 +2067,7 @@ class App:
         if sheet in PRINT_CHECK_CELLS and not sheet_has_data(wb, sheet):
             if not self.ask_missing_data(wb, sheet):
                 self.message(("Übernommen, aber " if committed else "")
-                             + "keine Daten vorhanden – PDF nicht erstellt.", error=True)
+                             + "keine Daten vorhanden – PDF nicht erstellt.")
                 return self.focus_id()
         # Dateiname abfragen (vorausgefüllt)
         name = pdf_name(self.id_norm)
@@ -2060,6 +2088,10 @@ class App:
         save_config(self.cfg)
         # PDF erzeugen, danach Haken zurücksetzen (sonst stünden im PDF die Voreinstellungen)
         wb.Worksheets(sheet).ExportAsFixedFormat(0, path)      # 0 = PDF
+        self.add_recent(self.vars[ROOM_COL].get().strip(), self.id_label,
+                        os.path.basename(path))
+        if sheet == BED_SHEET:
+            self.set_print_state(True)
         self.reset_options(wb)
         done = "übernommen, " if committed else ""
         self.message(f"Inv.-Nr. {self.id_label} {done}gespeichert: {os.path.basename(path)}")
